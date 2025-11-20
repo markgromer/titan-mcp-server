@@ -397,8 +397,8 @@ const httpServer = http.createServer(async (req, res) => {
   res.end("Not Found");
 });
 
-httpServer.listen(PORT, () => {
-  console.log(
-    `Titan Sweep&Go MCP server listening on http://localhost:${PORT}${MCP_PATH}`
-  );
+httpServer.listen(PORT, "0.0.0.0", () => {
+  console.log(`Titan MCP server listening on 0.0.0.0:${PORT}${MCP_PATH}`);
+});
+
 });
