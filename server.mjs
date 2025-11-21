@@ -383,7 +383,11 @@ const httpServer = http.createServer(async (req, res) => {
     }
 
     // Always attempt SSE; connector should keep the stream open.
-    const transport = new SSEServerTransport(req, res, { path: MCP_PATH });
+    // Make sure CORS is permissive for browser-based clients.
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Cache-Control", "no-cache");
+
+    const transport = new SSEServerTransport(req, res, MCP_PATH);
     try {
       await mcpServer.connect(transport);
     } catch (err) {
