@@ -382,7 +382,7 @@ const httpServer = http.createServer(async (req, res) => {
       );
       return;
     }
-
+  }
     const server = createTitanServer();
     const transport = new StdioServerTransport();
     await server.connect(transport);
