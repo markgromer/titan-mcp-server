@@ -3,7 +3,7 @@ import http from "node:http";
 import "dotenv/config";
 import { z } from "zod";
 import { Server } from "@modelcontextprotocol/sdk/server";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { HttpServerTransport } from "@modelcontextprotocol/sdk/server/http.js";
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
@@ -11,21 +11,22 @@ import {
 
 // ---- ENV + basic config -----------------------------------------------------
 
-const PORT = Number(process.env.PORT || 8787);
+const PORT = Number(process.env.PORT || 10000);  // Render will override to 10000
 const MCP_PATH = "/mcp";
 
 const CRM_BASE_URL =
   process.env.CRM_BASE_URL || "https://openapi.sweepandgo.com";
+
 const SNG_API_KEY = process.env.SNG_API_KEY || "";
 const ALLOW_WRITES = String(process.env.SNG_ALLOW_WRITES || "false") === "true";
 
 if (!SNG_API_KEY) {
   console.warn(
-    "[SNG MCP] WARNING: SNG_API_KEY is not set. All tools will fail until you add it to .env"
+    "[SNG MCP] WARNING: SNG_API_KEY is not set. All tools will fail until you add it in Render > Environment"
   );
 }
 
-// ---- Simple HTTP helper (uses built-in fetch) -------------------------------
+// ---- Simple HTTP helper -----------------------------------------------------
 
 async function sngRequest(path, { method = "GET", query, body } = {}) {
   const url = new URL(path, CRM_BASE_URL);
@@ -45,9 +46,7 @@ async function sngRequest(path, { method = "GET", query, body } = {}) {
   };
 
   const opts = { method, headers };
-  if (body) {
-    opts.body = JSON.stringify(body);
-  }
+  if (body) opts.body = JSON.stringify(body);
 
   const res = await fetch(url, opts);
 
@@ -61,85 +60,32 @@ async function sngRequest(path, { method = "GET", query, body } = {}) {
   return res.json();
 }
 
-// ---- Tool schemas -----------------------------------------------------------
+// ---- Schemas + Tool Implementations ----------------------------------------
 
-// Shared inputs
 const ZipDogsSchema = z.object({
-  zip_code: z.string().describe("5-digit ZIP code, e.g. 85706"),
-  number_of_dogs: z
-    .number()
-    .int()
-    .min(1)
-    .describe("Number of dogs in the household"),
-  last_time_yard_was_thoroughly_cleaned: z
-    .enum([
-      "one_week",
-      "two_weeks",
-      "three_weeks",
-      "one_month",
-      "two_months",
-      "3-4_months",
-      "5-6_months",
-      "7-9_months",
-      "10+_months",
-    ])
-    .describe("How long since the yard was last thoroughly cleaned"),
+  zip_code: z.string(),
+  number_of_dogs: z.number().int().min(1),
+  last_time_yard_was_thoroughly_cleaned: z.string(),
 });
 
 const OnboardingPriceInputSchema = ZipDogsSchema.extend({
-  clean_up_frequency: z
-    .enum([
-      "seven_times_a_week",
-      "six_times_a_week",
-      "five_times_a_week",
-      "four_times_a_week",
-      "three_times_a_week",
-      "two_times_a_week",
-      "once_a_week",
-      "every_other_week",
-      "once_every_four_weeks",
-      "once_a_month",
-    ])
-    .optional()
-    .describe("Desired service frequency, if known"),
+  clean_up_frequency: z.string().optional(),
 });
 
-// ---- Individual tool implementations ---------------------------------------
-
-// 1) Get onboarding price / cross-sell info
 async function tool_get_onboarding_price(args) {
   const input = OnboardingPriceInputSchema.parse(args);
-
   const data = await sngRequest(
     "/api/v2/client_on_boarding/price_registration_form",
-    {
-      // This endpoint is GET with body in docs; MCP tools are simpler if we
-      // just treat it as POST with JSON body; SNG accepts JSON either way.
-      // To be safe we'll send POST here, matching their example.
-      body: input,
-      method: "POST",
-    }
+    { method: "POST", body: input }
   );
-
-  return {
-    type: "text",
-    text: JSON.stringify(data, null, 2),
-  };
+  return { type: "text", text: JSON.stringify(data, null, 2) };
 }
 
-// 2) Get available packaged cross-sells
 async function tool_get_packages_list() {
-  const data = await sngRequest("/api/v2/packages_list", {
-    method: "GET",
-  });
-
-  return {
-    type: "text",
-    text: JSON.stringify(data, null, 2),
-  };
+  const data = await sngRequest("/api/v2/packages_list", { method: "GET" });
+  return { type: "text", text: JSON.stringify(data, null, 2) };
 }
 
-// 3) Parker-friendly quote + frequency recommendation
 async function tool_get_quote_recommendations(args) {
   const input = OnboardingPriceInputSchema.parse(args);
 
@@ -151,35 +97,25 @@ async function tool_get_quote_recommendations(args) {
     sngRequest("/api/v2/packages_list", { method: "GET" }),
   ]);
 
-  // Just format something chat-friendly; we're not trying to be perfect here.
   const base = priceInfo?.regular_price ?? priceInfo?.price ?? null;
   const initial = priceInfo?.initial_cleanup_price ?? null;
-  const recommendedFrequency = priceInfo?.recommended_frequency ?? null;
+  const recommended = priceInfo?.recommended_frequency ?? null;
 
   let lines = [];
-
   lines.push(
     `Here is a summary based on ${input.number_of_dogs} dog(s) in zip ${input.zip_code}.`
   );
 
-  if (base !== null) {
-    lines.push(`- Regular visit estimate: ${base}`);
-  }
-  if (initial !== null) {
-    lines.push(`- Initial cleanup estimate: ${initial}`);
-  }
-  if (recommendedFrequency) {
-    lines.push(`- Recommended frequency: ${recommendedFrequency}`);
-  }
+  if (base) lines.push(`- Regular visit estimate: ${base}`);
+  if (initial) lines.push(`- Initial cleanup estimate: ${initial}`);
+  if (recommended) lines.push(`- Recommended frequency: ${recommended}`);
 
   const cross = packagesInfo?.cross_sells || packagesInfo?.packages || [];
   if (Array.isArray(cross) && cross.length) {
     lines.push("");
     lines.push("Cross-sell ideas you can mention:");
     for (const pkg of cross.slice(0, 5)) {
-      const name = pkg.name || "Package";
-      const desc = pkg.description || "";
-      lines.push(`- ${name}: ${desc}`.trim());
+      lines.push(`- ${pkg.name}: ${pkg.description}`);
     }
   }
 
@@ -189,9 +125,7 @@ async function tool_get_quote_recommendations(args) {
   };
 }
 
-// 4) Create client (mutating) -----------------------------------------------
-
-const CreateClientInputSchema = z.object({
+const CreateClientSchema = z.object({
   zip_code: z.string(),
   number_of_dogs: z.number().int().min(1),
   last_time_yard_was_thoroughly_cleaned: z.string(),
@@ -212,11 +146,11 @@ async function tool_create_client(args) {
     return {
       type: "text",
       text:
-        "Writes are disabled for this MCP server. Set SNG_ALLOW_WRITES=true in .env if you really want Parker to create clients.",
+        "Writes disabled. Set SNG_ALLOW_WRITES=true in Render to enable this.",
     };
   }
 
-  const input = CreateClientInputSchema.parse(args);
+  const input = CreateClientSchema.parse(args);
 
   const data = await sngRequest("/api/v1/residential/onboarding", {
     method: "PUT",
@@ -225,124 +159,35 @@ async function tool_create_client(args) {
 
   return {
     type: "text",
-    text:
-      "Client created in Sweep&Go.\n\nResponse:\n" +
-      JSON.stringify(data, null, 2),
+    text: JSON.stringify(data, null, 2),
   };
 }
 
-// ---- MCP server setup ------------------------------------------------------
+// ---- Create MCP Server Instance --------------------------------------------
 
-function createTitanServer() {
+function buildMcpServer() {
   const server = new Server(
-    {
-      name: "titan-sweepandgo-mcp",
-      version: "1.0.0",
-    },
-    {
-      capabilities: {
-        tools: {},
-      },
-    }
+    { name: "titan-sweepandgo-mcp", version: "1.0.0" },
+    { capabilities: { tools: {} } }
   );
 
-  // READ-ONLY TOOLS - safe for Parker to call freely
   server.setRequestHandler(ListToolsRequestSchema, async () => {
-    const tools = [
-      {
-        name: "get_onboarding_price",
-        description:
-          "Look up Sweep&Go onboarding price info for a household (dogs, zip, last cleaned, optional frequency). Returns raw JSON from Sweep&Go.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            zip_code: { type: "string" },
-            number_of_dogs: { type: "number" },
-            last_time_yard_was_thoroughly_cleaned: { type: "string" },
-            clean_up_frequency: { type: "string" },
-          },
-          required: [
-            "zip_code",
-            "number_of_dogs",
-            "last_time_yard_was_thoroughly_cleaned",
-          ],
+    return {
+      tools: [
+        { name: "get_onboarding_price", inputSchema: OnboardingPriceInputSchema },
+        { name: "get_packages_list", inputSchema: {} },
+        {
+          name: "get_quote_recommendations",
+          inputSchema: OnboardingPriceInputSchema,
         },
-      },
-      {
-        name: "get_packages_list",
-        description:
-          "Fetch packaged cross-sells / add-on bundles from Sweep&Go for the organization.",
-        inputSchema: {
-          type: "object",
-          properties: {},
-        },
-      },
-      {
-        name: "get_quote_recommendations",
-        description:
-          "For Parker: given dogs/zip/last cleaned (and optional frequency), fetch pricing and packages and return a human-readable summary Parker can speak back as a quote suggestion.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            zip_code: { type: "string" },
-            number_of_dogs: { type: "number" },
-            last_time_yard_was_thoroughly_cleaned: { type: "string" },
-            clean_up_frequency: { type: "string" },
-          },
-          required: [
-            "zip_code",
-            "number_of_dogs",
-            "last_time_yard_was_thoroughly_cleaned",
-          ],
-        },
-      },
-
-      // MUTATING TOOLS - grouped so we keep them mentally separate
-      {
-        name: "create_client",
-        description:
-          "[MUTATING] Create a new residential client in Sweep&Go using the onboarding form fields. Respects SNG_ALLOW_WRITES flag.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            zip_code: { type: "string" },
-            number_of_dogs: { type: "number" },
-            last_time_yard_was_thoroughly_cleaned: { type: "string" },
-            clean_up_frequency: { type: "string" },
-            first_name: { type: "string" },
-            last_name: { type: "string" },
-            email: { type: "string" },
-            home_address: { type: "string" },
-            city: { type: "string" },
-            state: { type: "string" },
-            home_phone_number: { type: "string" },
-            cell_phone_number: { type: "string" },
-            additional_comment: { type: "string" },
-          },
-          required: [
-            "zip_code",
-            "number_of_dogs",
-            "last_time_yard_was_thoroughly_cleaned",
-            "clean_up_frequency",
-            "first_name",
-            "last_name",
-            "email",
-            "home_address",
-            "city",
-            "state",
-          ],
-        },
-      },
-    ];
-
-    return { tools };
+        { name: "create_client", inputSchema: CreateClientSchema },
+      ],
+    };
   });
 
   server.setRequestHandler(CallToolRequestSchema, async (req) => {
-    const name = req.params.name;
     const args = req.params.arguments || {};
-
-    switch (name) {
+    switch (req.params.name) {
       case "get_onboarding_price":
         return { content: [await tool_get_onboarding_price(args)] };
       case "get_packages_list":
@@ -352,52 +197,20 @@ function createTitanServer() {
       case "create_client":
         return { content: [await tool_create_client(args)] };
       default:
-        throw new Error(`Unknown tool: ${name}`);
+        throw new Error(`Unknown tool: ${req.params.name}`);
     }
   });
 
   return server;
 }
 
-// ---- HTTP wrapper that hosts the MCP endpoint at /mcp ----------------------
+// ---- HTTP Server + MCP over SSE --------------------------------------------
 
-const httpServer = http.createServer(async (req, res) => {
-  if (req.url?.startsWith(MCP_PATH)) {
-    // Reject non-SSE clients
-    const accept = req.headers["accept"] || "";
-    if (!accept.includes("text/event-stream")) {
-      res.writeHead(406, { "Content-Type": "application/json" });
-      res.end(
-        JSON.stringify({
-          jsonrpc: "2.0",
-          error: {
-            code: -32000,
-            message: "Not Acceptable: Client must accept text/event-stream",
-          },
-          id: null,
-        })
-      );
-      return;
-    }
+const mcpServer = buildMcpServer();
+const transport = new HttpServerTransport({ path: MCP_PATH });
 
-    // Start MCP server (stdio)
-    const server = createTitanServer();
-    const transport = new StdioServerTransport();
-    await server.connect(transport);
+await mcpServer.connect(transport);
 
-    // Simple HTTP sanity message
-    res.writeHead(200, { "Content-Type": "text/plain" });
-    res.end("Titan Sweep&Go MCP server is running");
-    return;
-  }
-
-  // Anything outside /mcp -> 404
-  res.writeHead(404, { "Content-Type": "text/plain" });
-  res.end("Not Found");
-});
-
-// Start HTTP server (Render requires 0.0.0.0)
-httpServer.listen(PORT, "0.0.0.0", () => {
-  const host = process.env.RENDER_EXTERNAL_URL || "http://localhost";
-  console.log(`Titan Sweep&Go MCP server listening on ${host}${MCP_PATH}`);
+http.createServer(transport.handleRequest).listen(PORT, "0.0.0.0", () => {
+  console.log(`MCP server listening on port ${PORT} at ${MCP_PATH}`);
 });
