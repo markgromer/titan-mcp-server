@@ -368,39 +368,48 @@ function createTitanServer() {
 // ---------------------------------------------------------------------------
 
 const mcpServer = createTitanServer();
+const transports = new Map();
 
 const httpServer = http.createServer(async (req, res) => {
-  if (req.url?.startsWith(MCP_PATH)) {
-    console.log(
-      `[MCP] incoming connection`,
-      JSON.stringify({ method: req.method, url: req.url, headers: req.headers })
-    );
+  if (!req.url?.startsWith(MCP_PATH)) {
+    res.writeHead(404, { "Content-Type": "text/plain" });
+    res.end("Not Found");
+    return;
+  }
 
-    // Allow preflight for browsers/clients
-    if (req.method === "OPTIONS") {
-      res.writeHead(204, {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Headers": "Content-Type, Accept",
-        "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-      });
-      res.end();
-      return;
-    }
+  console.log(
+    `[MCP] incoming connection`,
+    JSON.stringify({ method: req.method, url: req.url, headers: req.headers })
+  );
 
-    // Always attempt SSE; connector should keep the stream open.
-    // Make sure CORS is permissive for browser-based clients.
+  // Allow preflight for browsers/clients
+  if (req.method === "OPTIONS") {
+    res.writeHead(204, {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Headers": "Content-Type, Accept",
+      "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    });
+    res.end();
+    return;
+  }
+
+  const parsedUrl = new URL(req.url, `http://${req.headers.host}`);
+  const sessionId = parsedUrl.searchParams.get("sessionId");
+
+  // SSE setup (GET)
+  if (req.method === "GET") {
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Cache-Control", "no-cache");
 
-    // Construct SSE transport with node http req/res
-    const transport = new SSEServerTransport({
-      request: req,
-      response: res,
-    });
+    const transport = new SSEServerTransport(MCP_PATH, res);
+    transports.set(transport.sessionId, transport);
+    transport.onclose = () => transports.delete(transport.sessionId);
+
     try {
       await mcpServer.connect(transport);
     } catch (err) {
       console.error("[MCP] transport error", err);
+      transports.delete(transport.sessionId);
       res.writeHead(500, { "Content-Type": "application/json" });
       res.end(
         JSON.stringify({
@@ -413,8 +422,60 @@ const httpServer = http.createServer(async (req, res) => {
     return;
   }
 
-  res.writeHead(404, { "Content-Type": "text/plain" });
-  res.end("Not Found");
+  // Incoming messages (POST)
+  if (req.method === "POST") {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+
+    if (!sessionId) {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          error: { code: -32000, message: "Missing sessionId" },
+          id: null,
+        })
+      );
+      return;
+    }
+
+    const transport = transports.get(sessionId);
+    if (!transport) {
+      res.writeHead(404, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          error: { code: -32000, message: "Unknown session" },
+          id: null,
+        })
+      );
+      return;
+    }
+
+    try {
+      await transport.handlePostMessage(req, res);
+    } catch (err) {
+      console.error("[MCP] handlePostMessage error", err);
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          error: { code: -32000, message: err?.message || "Server error" },
+          id: null,
+        })
+      );
+    }
+    return;
+  }
+
+  // Method not allowed
+  res.writeHead(405, { "Content-Type": "application/json" });
+  res.end(
+    JSON.stringify({
+      jsonrpc: "2.0",
+      error: { code: -32000, message: "Method not allowed" },
+      id: null,
+    })
+  );
 });
 
 httpServer.listen(PORT, "0.0.0.0", () => {
