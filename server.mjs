@@ -4,7 +4,7 @@ import http from "node:http";
 import "dotenv/config";
 import { z } from "zod";
 import { Server } from "@modelcontextprotocol/sdk/server";
-import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/http.js";
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
@@ -392,10 +392,8 @@ const httpServer = http.createServer(async (req, res) => {
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Cache-Control", "no-cache");
 
-    // Construct transport with req/res and path
-    const transport = new SSEServerTransport({
-      request: req,
-      response: res,
+    // Construct HTTP transport (node http req/res)
+    const transport = new StreamableHTTPServerTransport(req, res, {
       path: MCP_PATH,
     });
     try {
