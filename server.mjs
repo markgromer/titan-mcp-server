@@ -371,6 +371,13 @@ const mcpServer = createTitanServer();
 const transports = new Map();
 
 const httpServer = http.createServer(async (req, res) => {
+  // Simple health check on root for Render/uptime probes
+  if (req.url === "/" && req.method === "GET") {
+    res.writeHead(200, { "Content-Type": "text/plain" });
+    res.end("Titan Sweep&Go MCP server is up");
+    return;
+  }
+
   if (!req.url?.startsWith(MCP_PATH)) {
     res.writeHead(404, { "Content-Type": "text/plain" });
     res.end("Not Found");
