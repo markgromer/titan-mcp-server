@@ -400,11 +400,11 @@ const httpServer = http.createServer(async (req, res) => {
 // ... everything above stays the same ...
 
 // Start the HTTP server
-httpServer.listen(PORT, () => {
-  console.log(
-    `Titan Sweep&Go MCP server listening on http://localhost:${PORT}${MCP_PATH}`
-  );
-});
+403 httpServer.listen(PORT, "0.0.0.0", () => {
+404   const host = process.env.RENDER_EXTERNAL_URL || "http://localhost";
+405   console.log(`Titan Sweep&Go MCP server listening on ${host}${MCP_PATH}`);
+406 });
+
 
 
 });
