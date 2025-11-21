@@ -364,9 +364,11 @@ function createTitanServer() {
 
 // ---- HTTP wrapper that hosts the MCP endpoint at /mcp ----------------------
 
+// ---- HTTP wrapper that hosts the MCP endpoint at /mcp ----------------------
+
 const httpServer = http.createServer(async (req, res) => {
   if (req.url?.startsWith(MCP_PATH)) {
-    // Reject non-SSE clients (what you saw in the browser earlier)
+    // Reject non-SSE clients
     const accept = req.headers["accept"] || "";
     if (!accept.includes("text/event-stream")) {
       res.writeHead(406, { "Content-Type": "application/json" });
@@ -382,29 +384,25 @@ const httpServer = http.createServer(async (req, res) => {
       );
       return;
     }
-  }
+
+    // Start MCP server (stdio)
     const server = createTitanServer();
     const transport = new StdioServerTransport();
     await server.connect(transport);
-    // In a real HTTP-over-MCP setup, we’d wire this differently, but for now
-    // your IDE will connect over stdio; the HTTP endpoint is just a sanity page.
+
+    // Simple HTTP sanity message
     res.writeHead(200, { "Content-Type": "text/plain" });
     res.end("Titan Sweep&Go MCP server is running");
     return;
   }
 
+  // Anything outside /mcp → 404
   res.writeHead(404, { "Content-Type": "text/plain" });
   res.end("Not Found");
 });
 
-// ... everything above stays the same ...
-
-// Start the HTTP server
-403 httpServer.listen(PORT, "0.0.0.0", () => {
-404   const host = process.env.RENDER_EXTERNAL_URL || "http://localhost";
-405   console.log(`Titan Sweep&Go MCP server listening on ${host}${MCP_PATH}`);
-406 });
-
-
-
+// Start HTTP server (Render requires 0.0.0.0)
+httpServer.listen(PORT, "0.0.0.0", () => {
+  const host = process.env.RENDER_EXTERNAL_URL || "http://localhost";
+  console.log(`Titan Sweep&Go MCP server listening on ${host}${MCP_PATH}`);
 });
