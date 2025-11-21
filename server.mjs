@@ -402,12 +402,7 @@ const httpServer = http.createServer(async (req, res) => {
     const endpoint = `${proto}://${host}${MCP_PATH}`;
 
     // Construct transport with req/res and explicit endpoint
-    const transport = new SSEServerTransport(req, res, {
-      path: MCP_PATH,
-      endpoint,
-    });
-    try {
-      await mcpServer.connect(transport);
+  
     } catch (err) {
       console.error("[MCP] transport error", err);
       res.writeHead(500, { "Content-Type": "application/json" });
