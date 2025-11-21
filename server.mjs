@@ -121,8 +121,8 @@ async function tool_get_onboarding_price(args) {
   const data = await sngRequest(
     "/api/v2/client_on_boarding/price_registration_form",
     {
-      method: "POST",
-      body: input,
+      method: "GET",
+      query: input,
     }
   );
 
@@ -150,8 +150,8 @@ async function tool_get_quote_recommendations(args) {
 
   const [priceInfo, packagesInfo] = await Promise.all([
     sngRequest("/api/v2/client_on_boarding/price_registration_form", {
-      method: "POST",
-      body: input,
+      method: "GET",
+      query: input,
     }),
     sngRequest("/api/v2/packages_list", { method: "GET" }),
   ]);
