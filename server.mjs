@@ -392,11 +392,20 @@ const httpServer = http.createServer(async (req, res) => {
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Cache-Control", "no-cache");
 
-    // Construct transport with proper options object (req/res + path)
+    // Build an explicit endpoint string (avoid [object Object] in event data)
+    const proto =
+      (req.headers["x-forwarded-proto"] || "https").toString().split(",")[0];
+    const host =
+      req.headers["x-forwarded-host"] ||
+      req.headers.host ||
+      "titan-mcp-server.onrender.com";
+    const endpoint = `${proto}://${host}${MCP_PATH}`;
+
+    // Construct transport with req/res and explicit endpoint
     const transport = new SSEServerTransport({
       req,
       res,
-      path: MCP_PATH,
+      endpoint,
     });
     try {
       await mcpServer.connect(transport);
