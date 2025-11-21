@@ -4,7 +4,7 @@ import http from "node:http";
 import "dotenv/config";
 import { z } from "zod";
 import { Server } from "@modelcontextprotocol/sdk/server";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
@@ -364,17 +364,31 @@ function createTitanServer() {
 }
 
 // ---------------------------------------------------------------------------
-// Start MCP server (stdio transport) and HTTP health endpoint
+// Start MCP server with SSE transport on /mcp and a simple 404 elsewhere
 // ---------------------------------------------------------------------------
 
 const mcpServer = createTitanServer();
-const stdioTransport = new StdioServerTransport();
-mcpServer.connect(stdioTransport);
 
-const httpServer = http.createServer((req, res) => {
+const httpServer = http.createServer(async (req, res) => {
   if (req.url?.startsWith(MCP_PATH)) {
-    res.writeHead(200, { "Content-Type": "text/plain" });
-    res.end("Titan Sweep&Go MCP server is running (stdio transport).");
+    const accept = req.headers["accept"] || "";
+    if (!accept.includes("text/event-stream")) {
+      res.writeHead(406, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          error: {
+            code: -32000,
+            message: "Not Acceptable: Client must accept text/event-stream",
+          },
+          id: null,
+        })
+      );
+      return;
+    }
+
+    const transport = new SSEServerTransport(req, res, { path: MCP_PATH });
+    await mcpServer.connect(transport);
     return;
   }
 
@@ -384,5 +398,5 @@ const httpServer = http.createServer((req, res) => {
 
 httpServer.listen(PORT, "0.0.0.0", () => {
   const host = process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
-  console.log(`Titan Sweep&Go HTTP health listening on ${host}${MCP_PATH}`);
+  console.log(`Titan Sweep&Go MCP SSE listening on ${host}${MCP_PATH}`);
 });
