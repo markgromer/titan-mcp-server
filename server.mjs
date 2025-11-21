@@ -393,7 +393,10 @@ const httpServer = http.createServer(async (req, res) => {
     res.setHeader("Cache-Control", "no-cache");
 
     // Construct SSE transport with node http req/res
-    const transport = new SSEServerTransport(req, res);
+    const transport = new SSEServerTransport({
+      request: req,
+      response: res,
+    });
     try {
       await mcpServer.connect(transport);
     } catch (err) {
