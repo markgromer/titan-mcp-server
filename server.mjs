@@ -392,7 +392,8 @@ const httpServer = http.createServer(async (req, res) => {
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Cache-Control", "no-cache");
 
-    const transport = new SSEServerTransport(req, res, { path: MCP_PATH });
+    // Use SDK SSE transport (let it derive the path from req/res)
+    const transport = new SSEServerTransport(req, res);
     try {
       await mcpServer.connect(transport);
     } catch (err) {
