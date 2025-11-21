@@ -371,24 +371,31 @@ const mcpServer = createTitanServer();
 
 const httpServer = http.createServer(async (req, res) => {
   if (req.url?.startsWith(MCP_PATH)) {
-    const accept = req.headers["accept"] || "";
-    if (!accept.includes("text/event-stream")) {
-      res.writeHead(406, { "Content-Type": "application/json" });
-      res.end(
-        JSON.stringify({
-          jsonrpc: "2.0",
-          error: {
-            code: -32000,
-            message: "Not Acceptable: Client must accept text/event-stream",
-          },
-          id: null,
-        })
-      );
+    // Allow preflight for browsers/clients
+    if (req.method === "OPTIONS") {
+      res.writeHead(204, {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Headers": "Content-Type, Accept",
+        "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+      });
+      res.end();
       return;
     }
 
+    // Always attempt SSE; connector should keep the stream open.
     const transport = new SSEServerTransport(req, res, { path: MCP_PATH });
-    await mcpServer.connect(transport);
+    try {
+      await mcpServer.connect(transport);
+    } catch (err) {
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          error: { code: -32000, message: err?.message || "Server error" },
+          id: null,
+        })
+      );
+    }
     return;
   }
 
