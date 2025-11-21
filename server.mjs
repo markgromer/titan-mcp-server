@@ -392,8 +392,16 @@ const httpServer = http.createServer(async (req, res) => {
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Cache-Control", "no-cache");
 
-    // Use SDK SSE transport (let it derive the path from req/res)
-    const transport = new SSEServerTransport(req, res);
+    // Build a stable external endpoint for the SDK handshake (avoids [object Object])
+    const proto =
+      (req.headers["x-forwarded-proto"] || "https").toString().split(",")[0];
+    const host =
+      req.headers["x-forwarded-host"] ||
+      req.headers.host ||
+      "titan-mcp-server.onrender.com";
+    const endpoint = `${proto}://${host}${MCP_PATH}`;
+
+    const transport = new SSEServerTransport(req, res, { endpoint });
     try {
       await mcpServer.connect(transport);
     } catch (err) {
