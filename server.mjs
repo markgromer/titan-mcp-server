@@ -1,17 +1,13 @@
-// server.mjs
+// titan Sweep&Go MCP server
 import http from "node:http";
 import "dotenv/config";
 import { z } from "zod";
 import { Server } from "@modelcontextprotocol/sdk/server";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
-  StdioServerTransport,
-} from "@modelcontextprotocol/sdk/server/stdio.js";
-import {
-  import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-
 
 // ---- ENV + basic config -----------------------------------------------------
 
@@ -29,7 +25,7 @@ if (!SNG_API_KEY) {
   );
 }
 
-// ---- Simple HTTP helper (no node-fetch) -------------------------------------
+// ---- Simple HTTP helper (uses built-in fetch) -------------------------------
 
 async function sngRequest(path, { method = "GET", query, body } = {}) {
   const url = new URL(path, CRM_BASE_URL);
@@ -117,10 +113,9 @@ async function tool_get_onboarding_price(args) {
   const data = await sngRequest(
     "/api/v2/client_on_boarding/price_registration_form",
     {
-      method: "GET",
       // This endpoint is GET with body in docs; MCP tools are simpler if we
       // just treat it as POST with JSON body; SNG accepts JSON either way.
-      // To be safe we’ll send POST here, matching their example.
+      // To be safe we'll send POST here, matching their example.
       body: input,
       method: "POST",
     }
@@ -156,7 +151,7 @@ async function tool_get_quote_recommendations(args) {
     sngRequest("/api/v2/packages_list", { method: "GET" }),
   ]);
 
-  // Just format something chat-friendly; we’re not trying to be perfect here.
+  // Just format something chat-friendly; we're not trying to be perfect here.
   const base = priceInfo?.regular_price ?? priceInfo?.price ?? null;
   const initial = priceInfo?.initial_cleanup_price ?? null;
   const recommendedFrequency = priceInfo?.recommended_frequency ?? null;
@@ -168,13 +163,13 @@ async function tool_get_quote_recommendations(args) {
   );
 
   if (base !== null) {
-    lines.push(`• Regular visit estimate: ${base}`);
+    lines.push(`- Regular visit estimate: ${base}`);
   }
   if (initial !== null) {
-    lines.push(`• Initial cleanup estimate: ${initial}`);
+    lines.push(`- Initial cleanup estimate: ${initial}`);
   }
   if (recommendedFrequency) {
-    lines.push(`• Recommended frequency: ${recommendedFrequency}`);
+    lines.push(`- Recommended frequency: ${recommendedFrequency}`);
   }
 
   const cross = packagesInfo?.cross_sells || packagesInfo?.packages || [];
@@ -184,7 +179,7 @@ async function tool_get_quote_recommendations(args) {
     for (const pkg of cross.slice(0, 5)) {
       const name = pkg.name || "Package";
       const desc = pkg.description || "";
-      lines.push(`• ${name}: ${desc}`.trim());
+      lines.push(`- ${name}: ${desc}`.trim());
     }
   }
 
@@ -251,7 +246,7 @@ function createTitanServer() {
     }
   );
 
-  // READ-ONLY TOOLS – safe for Parker to call freely
+  // READ-ONLY TOOLS - safe for Parker to call freely
   server.setRequestHandler(ListToolsRequestSchema, async () => {
     const tools = [
       {
@@ -302,7 +297,7 @@ function createTitanServer() {
         },
       },
 
-      // MUTATING TOOLS – grouped so we keep them mentally separate
+      // MUTATING TOOLS - grouped so we keep them mentally separate
       {
         name: "create_client",
         description:
@@ -366,8 +361,6 @@ function createTitanServer() {
 
 // ---- HTTP wrapper that hosts the MCP endpoint at /mcp ----------------------
 
-// ---- HTTP wrapper that hosts the MCP endpoint at /mcp ----------------------
-
 const httpServer = http.createServer(async (req, res) => {
   if (req.url?.startsWith(MCP_PATH)) {
     // Reject non-SSE clients
@@ -398,7 +391,7 @@ const httpServer = http.createServer(async (req, res) => {
     return;
   }
 
-  // Anything outside /mcp → 404
+  // Anything outside /mcp -> 404
   res.writeHead(404, { "Content-Type": "text/plain" });
   res.end("Not Found");
 });
