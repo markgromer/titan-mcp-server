@@ -371,6 +371,11 @@ const mcpServer = createTitanServer();
 
 const httpServer = http.createServer(async (req, res) => {
   if (req.url?.startsWith(MCP_PATH)) {
+    console.log(
+      `[MCP] incoming connection`,
+      JSON.stringify({ method: req.method, url: req.url, headers: req.headers })
+    );
+
     // Allow preflight for browsers/clients
     if (req.method === "OPTIONS") {
       res.writeHead(204, {
@@ -391,6 +396,7 @@ const httpServer = http.createServer(async (req, res) => {
     try {
       await mcpServer.connect(transport);
     } catch (err) {
+      console.error("[MCP] transport error", err);
       res.writeHead(500, { "Content-Type": "application/json" });
       res.end(
         JSON.stringify({
