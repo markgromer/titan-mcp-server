@@ -4,7 +4,7 @@ import http from "node:http";
 import "dotenv/config";
 import { z } from "zod";
 import { Server } from "@modelcontextprotocol/sdk/server";
-import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/http.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
@@ -29,7 +29,7 @@ if (!SNG_API_KEY) {
 }
 
 // ---------------------------------------------------------------------------
-// Simple HTTP helper (uses global fetch – Node 18+)
+// Simple HTTP helper (uses global fetch - Node 18+)
 // ---------------------------------------------------------------------------
 
 async function sngRequest(path, { method = "GET", query, body } = {}) {
@@ -167,13 +167,13 @@ async function tool_get_quote_recommendations(args) {
   );
 
   if (base !== null) {
-    lines.push(`• Regular visit estimate: ${base}`);
+    lines.push(`- Regular visit estimate: ${base}`);
   }
   if (initial !== null) {
-    lines.push(`• Initial cleanup estimate: ${initial}`);
+    lines.push(`- Initial cleanup estimate: ${initial}`);
   }
   if (recommendedFrequency) {
-    lines.push(`• Recommended frequency: ${recommendedFrequency}`);
+    lines.push(`- Recommended frequency: ${recommendedFrequency}`);
   }
 
   const cross = packagesInfo?.cross_sells || packagesInfo?.packages || [];
@@ -183,7 +183,7 @@ async function tool_get_quote_recommendations(args) {
     for (const pkg of cross.slice(0, 5)) {
       const name = pkg.name || "Package";
       const desc = pkg.description || "";
-      lines.push(`• ${name}: ${desc}`.trim());
+      lines.push(`- ${name}: ${desc}`.trim());
     }
   }
 
@@ -363,50 +363,26 @@ function createTitanServer() {
   return server;
 }
 
-// One MCP server instance for all HTTP connections
+// ---------------------------------------------------------------------------
+// Start MCP server (stdio transport) and HTTP health endpoint
+// ---------------------------------------------------------------------------
+
 const mcpServer = createTitanServer();
+const stdioTransport = new StdioServerTransport();
+mcpServer.connect(stdioTransport);
 
-// ---------------------------------------------------------------------------
-// HTTP wrapper that hosts MCP at /mcp using SSE
-// ---------------------------------------------------------------------------
-
-const httpServer = http.createServer(async (req, res) => {
+const httpServer = http.createServer((req, res) => {
   if (req.url?.startsWith(MCP_PATH)) {
-    const accept = req.headers["accept"] || "";
-
-    // MCP over HTTP requires Server-Sent Events
-    if (!accept.includes("text/event-stream")) {
-      res.writeHead(406, { "Content-Type": "application/json" });
-      res.end(
-        JSON.stringify({
-          jsonrpc: "2.0",
-          error: {
-            code: -32000,
-            message: "Not Acceptable: Client must accept text/event-stream",
-          },
-          id: null,
-        })
-      );
-      return;
-    }
-
-    // Hand the connection to the MCP HTTP transport.
-    const transport = new StreamableHTTPServerTransport(req, res, {
-      path: MCP_PATH,
-    });
-
-    // We don't await this; it resolves when the connection closes.
-    mcpServer.connect(transport);
+    res.writeHead(200, { "Content-Type": "text/plain" });
+    res.end("Titan Sweep&Go MCP server is running (stdio transport).");
     return;
   }
 
-  // Simple 404 for everything else
   res.writeHead(404, { "Content-Type": "text/plain" });
   res.end("Not Found");
 });
 
-// Start HTTP server (Render requires 0.0.0.0)
 httpServer.listen(PORT, "0.0.0.0", () => {
   const host = process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
-  console.log(`Titan Sweep&Go MCP server listening on ${host}${MCP_PATH}`);
+  console.log(`Titan Sweep&Go HTTP health listening on ${host}${MCP_PATH}`);
 });
