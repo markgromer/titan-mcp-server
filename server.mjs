@@ -403,8 +403,9 @@ const httpServer = http.createServer(async (req, res) => {
 
     // Construct transport with req/res and explicit endpoint
     const transport = new SSEServerTransport({
-      req,
-      res,
+      request: req,
+      response: res,
+      path: MCP_PATH,
       endpoint,
     });
     try {
