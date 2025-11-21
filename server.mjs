@@ -7,9 +7,11 @@ import {
   StdioServerTransport,
 } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
+  import {
   CallToolRequestSchema,
-  ListToolsResultSchema,
+  ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
+
 
 // ---- ENV + basic config -----------------------------------------------------
 
@@ -250,7 +252,7 @@ function createTitanServer() {
   );
 
   // READ-ONLY TOOLS – safe for Parker to call freely
-  server.setRequestHandler(ListToolsResultSchema, async () => {
+  server.setRequestHandler(ListToolsRequestSchema, async () => {
     const tools = [
       {
         name: "get_onboarding_price",
