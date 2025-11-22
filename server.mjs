@@ -93,11 +93,13 @@ async function sngRequest(path, { method = "GET", query, body } = {}) {
 // Basic HTTP helpers
 async function readRequestBody(req) {
   return new Promise((resolve, reject) => {
-    let data = "";
+    const chunks = [];
     req.on("data", (chunk) => {
-      data += chunk;
+      chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
     });
-    req.on("end", () => resolve(data));
+    req.on("end", () => {
+      resolve(Buffer.concat(chunks).toString("utf8"));
+    });
     req.on("error", reject);
   });
 }
