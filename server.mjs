@@ -841,8 +841,15 @@ async function handleJsonRpc(req, res) {
           serverInfo: { name: "titan-sweepandgo", version: "1.0.0" },
           capabilities: {
             tools: { listChanged: false },
+            resources: { supported: false },
+            prompts: { supported: false },
           },
         });
+        return;
+      }
+      case "notifications/initialized": {
+        // Retell MCP client sends this notification; acknowledge quietly
+        respond({});
         return;
       }
       case "tools/list": {
