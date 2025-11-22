@@ -21,6 +21,7 @@ const CRM_BASE_URL =
   process.env.CRM_BASE_URL || "https://openapi.sweepandgo.com";
 const SNG_API_KEY = process.env.SNG_API_KEY || "";
 const ALLOW_WRITES = String(process.env.SNG_ALLOW_WRITES || "false") === "true";
+const ORG_SLUG = process.env.SNG_ORG_SLUG || process.env.SNG_ORGANIZATION || "";
 
 if (!SNG_API_KEY) {
   console.warn(
@@ -41,6 +42,11 @@ async function sngRequest(path, { method = "GET", query, body } = {}) {
         url.searchParams.set(k, String(v));
       }
     }
+  }
+
+  // Automatically inject organization slug if available and not already provided
+  if (ORG_SLUG && !url.searchParams.has("organization_slug")) {
+    url.searchParams.set("organization_slug", ORG_SLUG);
   }
 
   const headers = {
@@ -135,6 +141,18 @@ async function tool_get_onboarding_price(args) {
 // 2) Get available packaged cross-sells
 async function tool_get_packages_list() {
   const data = await sngRequest("/api/v2/packages_list", {
+    method: "GET",
+  });
+
+  return {
+    type: "text",
+    text: JSON.stringify(data, null, 2),
+  };
+}
+
+// 2b) Get all free quotes (listed in S&G docs)
+async function tool_get_free_quotes() {
+  const data = await sngRequest("/api/v2/free_quotes", {
     method: "GET",
   });
 
@@ -283,6 +301,15 @@ function createTitanServer() {
         },
       },
       {
+        name: "get_free_quotes",
+        description:
+          "Fetch all pre-configured free quotes from Sweep&Go (api/v2/free_quotes).",
+        inputSchema: {
+          type: "object",
+          properties: {},
+        },
+      },
+      {
         name: "get_quote_recommendations",
         description:
           "Given dogs/zip/last cleaned (and optional frequency), fetch pricing and packages and return a human-readable summary Parker can use as a quote.",
@@ -351,6 +378,8 @@ function createTitanServer() {
         return { content: [await tool_get_onboarding_price(args)] };
       case "get_packages_list":
         return { content: [await tool_get_packages_list()] };
+      case "get_free_quotes":
+        return { content: [await tool_get_free_quotes()] };
       case "get_quote_recommendations":
         return { content: [await tool_get_quote_recommendations(args)] };
       case "create_client":
