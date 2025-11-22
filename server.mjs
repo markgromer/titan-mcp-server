@@ -44,10 +44,16 @@ async function sngRequest(path, { method = "GET", query, body } = {}) {
     }
   }
 
-  // Automatically inject organization slug if available and not already provided
-  if (ORG_SLUG && !url.searchParams.has("organization_slug")) {
+// Automatically inject organization identifier if available and not already provided
+if (ORG_SLUG) {
+  if (!url.searchParams.has("organization_slug")) {
     url.searchParams.set("organization_slug", ORG_SLUG);
   }
+  // Some endpoints expect `organization` instead of `organization_slug`
+  if (!url.searchParams.has("organization")) {
+    url.searchParams.set("organization", ORG_SLUG);
+  }
+}
 
   const headers = {
     Authorization: `Bearer ${SNG_API_KEY}`,
