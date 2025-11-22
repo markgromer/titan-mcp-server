@@ -105,11 +105,8 @@ async function readRequestBody(req) {
 }
 
 function authFailed(req) {
-  if (!MCP_TOKEN) return false;
-  const header = req.headers["authorization"];
-  if (!header || !header.startsWith("Bearer ")) return true;
-  const token = header.slice("Bearer ".length);
-  return token !== MCP_TOKEN;
+  // Auth disabled for GHL compatibility (proxy drops Authorization). If you need auth, re-enable here.
+  return false;
 }
 
 function setCors(req, res) {
