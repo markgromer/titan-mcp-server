@@ -763,6 +763,17 @@ function jsonRpcError(id, code, message, data) {
 }
 
 async function handleJsonRpc(req, res) {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Accept, Authorization");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+
+  const raw = await readRequestBody(req);
+  const rawTrimmed = raw?.trim() || "";
+  console.log("[MCP] jsonrpc raw body", {
+    contentLength: Number(req.headers["content-length"] || 0),
+    rawPreview: rawTrimmed.slice(0, 500),
+  });
+
   if (authFailed(req)) {
     res.writeHead(401, { "Content-Type": "application/json" });
     res.end(
@@ -771,8 +782,6 @@ async function handleJsonRpc(req, res) {
     return;
   }
 
-  const raw = await readRequestBody(req);
-  const rawTrimmed = raw?.trim() || "";
   // Some clients send empty bodies; default to tools/list for compatibility
   if (!rawTrimmed) {
     res.writeHead(200, { "Content-Type": "application/json" });
