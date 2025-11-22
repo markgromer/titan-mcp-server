@@ -1424,6 +1424,23 @@ const httpServer = http.createServer(async (req, res) => {
 
   // SSE setup (GET)
   if (req.method === "GET") {
+    // If this is a plain GET without sessionId and accepts JSON, serve tools/list for compatibility
+    const acceptsJson =
+      (req.headers["accept"] || "").toLowerCase().includes("application/json");
+    const hasSession = Boolean(sessionId);
+    if (!hasSession && acceptsJson) {
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: null,
+          result: { tools: MCP_TOOLS.map(({ handler, ...rest }) => rest), nextCursor: null },
+        })
+      );
+      return;
+    }
+
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Cache-Control", "no-cache");
 
