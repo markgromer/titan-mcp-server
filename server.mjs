@@ -790,7 +790,8 @@ async function handleJsonRpc(req, res) {
   }
 
   const id = payload.id ?? null;
-  const method = payload.method;
+  const method = String(payload.method || "");
+  const methodLower = method.toLowerCase();
   const params = payload.params || {};
 
   const respond = (result) => {
@@ -799,7 +800,7 @@ async function handleJsonRpc(req, res) {
   };
 
   try {
-    switch (method) {
+    switch (methodLower) {
       case "initialize": {
         respond({
           protocolVersion: MCP_PROTOCOL_VERSION,
