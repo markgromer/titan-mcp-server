@@ -1411,7 +1411,7 @@ const httpServer = http.createServer(async (req, res) => {
   if (req.method === "OPTIONS") {
     res.writeHead(204, {
       "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Headers": "Content-Type, Accept",
+      "Access-Control-Allow-Headers": "Content-Type, Accept, Authorization",
       "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
     });
     res.end();
@@ -1453,16 +1453,6 @@ const httpServer = http.createServer(async (req, res) => {
 
     // JSON-RPC MCP over HTTP (no sessionId)
     if (!sessionId) {
-      const contentType = req.headers["content-type"] || "";
-      if (!contentType.toLowerCase().includes("application/json")) {
-        res.writeHead(415, { "Content-Type": "application/json" });
-        res.end(
-          JSON.stringify(
-            jsonRpcError(null, -32600, "Unsupported Content-Type; expected application/json")
-          )
-        );
-        return;
-      }
       return handleJsonRpc(req, res);
     }
 
