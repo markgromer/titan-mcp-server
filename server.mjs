@@ -1456,6 +1456,21 @@ const httpServer = http.createServer(async (req, res) => {
 
   const parsedUrl = new URL(req.url, `http://${req.headers.host}`);
   const sessionId = parsedUrl.searchParams.get("sessionId");
+  const pathname = parsedUrl.pathname;
+
+  // Compatibility endpoint (some proxies call /tools)
+  if (req.method === "GET" && pathname === "/tools") {
+    setCors(req, res);
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(
+      JSON.stringify({
+        tools: ALL_TOOLS.map(({ handler, ...rest }) => rest),
+        mcpId: parsedUrl.searchParams.get("mcpId") || null,
+        traceId: globalThis.crypto?.randomUUID?.() || null,
+      })
+    );
+    return;
+  }
 
   // SSE setup (GET)
   if (req.method === "GET") {
