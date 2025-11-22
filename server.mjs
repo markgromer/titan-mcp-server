@@ -1431,6 +1431,9 @@ const httpServer = http.createServer(async (req, res) => {
   }
 
   // Compatibility endpoint (some proxies call /tools) should be allowed independently of MCP_PATH
+  const parsedUrl = new URL(req.url, `http://${req.headers.host}`);
+  const pathname = parsedUrl.pathname;
+
   if (req.method === "GET" && pathname === "/tools") {
     setCors(req, res);
     res.writeHead(200, { "Content-Type": "application/json" });
@@ -1468,10 +1471,7 @@ const httpServer = http.createServer(async (req, res) => {
     return;
   }
 
-  const parsedUrl = new URL(req.url, `http://${req.headers.host}`);
   const sessionId = parsedUrl.searchParams.get("sessionId");
-  const pathname = parsedUrl.pathname;
-
   // SSE setup (GET)
   if (req.method === "GET") {
     // If this is a plain GET without sessionId and accepts JSON, serve tools/list for compatibility
