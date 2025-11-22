@@ -1400,7 +1400,20 @@ const transports = new Map();
 
 const httpServer = http.createServer(async (req, res) => {
   // Well-known discovery
+  if (req.method === "OPTIONS" && req.url === "/.well-known/mcp.json") {
+    res.writeHead(204, {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Headers": "Content-Type, Accept, Authorization",
+      "Access-Control-Allow-Methods": "GET, OPTIONS",
+    });
+    res.end();
+    return;
+  }
+
   if (req.method === "GET" && req.url === "/.well-known/mcp.json") {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Accept, Authorization");
+    res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(
       JSON.stringify({
