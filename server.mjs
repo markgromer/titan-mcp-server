@@ -645,7 +645,9 @@ async function tool_get_packaged_cross_sells(args) {
 
 const MCP_PROTOCOL_VERSION = "2025-06-18";
 
-const MCP_TOOLS = [
+// Canonical tool list used by both JSON-RPC and SSE transports
+const ALL_TOOLS = [
+  // Aliases retained for backward compatibility with earlier sweepgo_* names
   {
     name: "sweepgo_get_onboarding_price",
     description: "Get onboarding price for a residential Sweep&Go client.",
@@ -760,6 +762,459 @@ const MCP_TOOLS = [
     },
     handler: tool_create_client,
   },
+  // Canonical tool names (used by SSE transport)
+  {
+    name: "get_onboarding_price",
+    description:
+      "Look up Sweep&Go onboarding price info for a household (dogs, zip, last cleaned, optional frequency). Returns raw JSON from Sweep&Go.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        zip_code: { type: "string" },
+        number_of_dogs: { type: "number" },
+        last_time_yard_was_thoroughly_cleaned: { type: "string" },
+        clean_up_frequency: { type: "string" },
+      },
+      required: [
+        "zip_code",
+        "number_of_dogs",
+        "last_time_yard_was_thoroughly_cleaned",
+      ],
+    },
+    handler: tool_get_onboarding_price,
+  },
+  {
+    name: "get_packages_list",
+    description:
+      "Fetch packaged cross-sells / add-on bundles from Sweep&Go for the organization.",
+    inputSchema: {
+      type: "object",
+      properties: {},
+    },
+    handler: tool_get_packages_list,
+  },
+  {
+    name: "get_free_quotes",
+    description:
+      "Fetch all pre-configured free quotes from Sweep&Go (api/v2/free_quotes).",
+    inputSchema: {
+      type: "object",
+      properties: {},
+    },
+    handler: tool_get_free_quotes,
+  },
+  {
+    name: "get_quote_recommendations",
+    description:
+      "Given dogs/zip/last cleaned (and optional frequency), fetch pricing and packages and return a human-readable summary Parker can use as a quote.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        zip_code: { type: "string" },
+        number_of_dogs: { type: "number" },
+        last_time_yard_was_thoroughly_cleaned: { type: "string" },
+        clean_up_frequency: { type: "string" },
+      },
+      required: [
+        "zip_code",
+        "number_of_dogs",
+        "last_time_yard_was_thoroughly_cleaned",
+      ],
+    },
+    handler: tool_get_quote_recommendations,
+  },
+  {
+    name: "create_client",
+    description:
+      "[MUTATING] Create a new residential client in Sweep&Go using the onboarding form fields. Respects SNG_ALLOW_WRITES flag.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        zip_code: { type: "string" },
+        number_of_dogs: { type: "number" },
+        last_time_yard_was_thoroughly_cleaned: { type: "string" },
+        clean_up_frequency: { type: "string" },
+        initial_cleanup_required: { type: "boolean" },
+        first_name: { type: "string" },
+        last_name: { type: "string" },
+        email: { type: "string" },
+        home_address: { type: "string" },
+        city: { type: "string" },
+        state: { type: "string" },
+        home_phone_number: { type: "string" },
+        cell_phone_number: { type: "string" },
+        additional_comment: { type: "string" },
+      },
+      required: [
+        "zip_code",
+        "number_of_dogs",
+        "last_time_yard_was_thoroughly_cleaned",
+        "clean_up_frequency",
+        "initial_cleanup_required",
+        "first_name",
+        "last_name",
+        "email",
+        "home_address",
+        "city",
+        "state",
+      ],
+    },
+    handler: tool_create_client,
+  },
+  {
+    name: "list_payment_methods",
+    description: "List payment methods for a specific customer.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        customer_id: { type: "string" },
+      },
+      required: ["customer_id"],
+    },
+    handler: tool_list_payment_methods,
+  },
+  {
+    name: "get_payment_method",
+    description: "Fetch a single payment method by id.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string" },
+      },
+      required: ["id"],
+    },
+    handler: tool_get_payment_method,
+  },
+  {
+    name: "get_payment_source",
+    description: "Fetch a payment source by id.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string" },
+      },
+      required: ["id"],
+    },
+    handler: tool_get_payment_source,
+  },
+  {
+    name: "create_payment_source",
+    description:
+      "[MUTATING] Create a payment source from an existing payment method for a customer.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        customer_id: { type: "string" },
+        payment_method_id: { type: "string" },
+        default: { type: "boolean" },
+      },
+      required: ["customer_id", "payment_method_id"],
+    },
+    handler: tool_create_payment_source,
+  },
+  {
+    name: "list_pre_authorizations",
+    description: "List pre-authorizations (optionally filtered by customer).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        customer_id: { type: "string" },
+      },
+    },
+    handler: tool_list_pre_authorizations,
+  },
+  {
+    name: "get_pre_authorization",
+    description: "Fetch a pre-authorization by id.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string" },
+      },
+      required: ["id"],
+    },
+    handler: tool_get_pre_authorization,
+  },
+  {
+    name: "create_pre_authorization",
+    description:
+      "[MUTATING] Create a pre-authorization for a customer/payment source.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        customer_id: { type: "string" },
+        amount: { type: "number" },
+        location_id: { type: "string" },
+        payment_source_id: { type: "string" },
+        external_reference: { type: "string" },
+        description: { type: "string" },
+      },
+      required: [
+        "customer_id",
+        "amount",
+        "location_id",
+        "payment_source_id",
+      ],
+    },
+    handler: tool_create_pre_authorization,
+  },
+  {
+    name: "delete_pre_authorization",
+    description: "[MUTATING] Delete a pre-authorization by id.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string" },
+      },
+      required: ["id"],
+    },
+    handler: tool_delete_pre_authorization,
+  },
+  {
+    name: "list_charges",
+    description: "List charges (optionally filtered by customer).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        customer_id: { type: "string" },
+      },
+    },
+    handler: tool_list_charges,
+  },
+  {
+    name: "get_charge",
+    description: "Fetch a charge by id.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string" },
+      },
+      required: ["id"],
+    },
+    handler: tool_get_charge,
+  },
+  {
+    name: "create_charge",
+    description:
+      "[MUTATING] Create a charge for a customer/payment source at a location.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        customer_id: { type: "string" },
+        amount: { type: "number" },
+        location_id: { type: "string" },
+        payment_source_id: { type: "string" },
+        external_reference: { type: "string" },
+        description: { type: "string" },
+      },
+      required: [
+        "customer_id",
+        "amount",
+        "location_id",
+        "payment_source_id",
+      ],
+    },
+    handler: tool_create_charge,
+  },
+  {
+    name: "refund_charge",
+    description:
+      "[MUTATING] Refund a charge (full or partial when amount is provided).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string" },
+        amount: { type: "number" },
+      },
+      required: ["id"],
+    },
+    handler: tool_refund_charge,
+  },
+  {
+    name: "list_customers",
+    description: "List customers with optional pagination.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        page: { type: "number" },
+        per: { type: "number" },
+      },
+    },
+    handler: tool_list_customers,
+  },
+  {
+    name: "get_customer",
+    description: "Fetch a customer by id.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string" },
+      },
+      required: ["id"],
+    },
+    handler: tool_get_customer,
+  },
+  {
+    name: "create_customer",
+    description: "[MUTATING] Create a customer.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        full_name: { type: "string" },
+        email: { type: "string" },
+        mobile: { type: "string" },
+        address_1: { type: "string" },
+        address_2: { type: "string" },
+        region: { type: "string" },
+        postal_code: { type: "string" },
+        notes: { type: "string" },
+      },
+      required: ["full_name", "email", "mobile"],
+    },
+    handler: tool_create_customer,
+  },
+  {
+    name: "update_customer",
+    description: "[MUTATING] Update customer fields (any combination).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string" },
+        full_name: { type: "string" },
+        email: { type: "string" },
+        mobile: { type: "string" },
+        address_1: { type: "string" },
+        address_2: { type: "string" },
+        region: { type: "string" },
+        postal_code: { type: "string" },
+        notes: { type: "string" },
+      },
+      required: ["id"],
+    },
+    handler: tool_update_customer,
+  },
+  {
+    name: "delete_customer",
+    description: "[MUTATING] Delete a customer by id.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string" },
+      },
+      required: ["id"],
+    },
+    handler: tool_delete_customer,
+  },
+  {
+    name: "list_locations",
+    description: "List locations with optional pagination.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        page: { type: "number" },
+        per: { type: "number" },
+      },
+    },
+    handler: tool_list_locations,
+  },
+  {
+    name: "get_location",
+    description: "Fetch a location by id.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string" },
+      },
+      required: ["id"],
+    },
+    handler: tool_get_location,
+  },
+  {
+    name: "create_location",
+    description: "[MUTATING] Create a location.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        name: { type: "string" },
+        address_1: { type: "string" },
+        address_2: { type: "string" },
+        postal_code: { type: "string" },
+        region: { type: "string" },
+        email: { type: "string" },
+        mobile: { type: "string" },
+        website: { type: "string" },
+        logo_url: { type: "string" },
+        type: { type: "string" },
+      },
+      required: [
+        "name",
+        "address_1",
+        "postal_code",
+        "region",
+        "email",
+        "mobile",
+      ],
+    },
+    handler: tool_create_location,
+  },
+  {
+    name: "update_location",
+    description: "[MUTATING] Update location fields (any combination).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string" },
+        name: { type: "string" },
+        address_1: { type: "string" },
+        address_2: { type: "string" },
+        postal_code: { type: "string" },
+        region: { type: "string" },
+        email: { type: "string" },
+        mobile: { type: "string" },
+        website: { type: "string" },
+        logo_url: { type: "string" },
+        type: { type: "string" },
+      },
+      required: ["id"],
+    },
+    handler: tool_update_location,
+  },
+  {
+    name: "list_webhooks",
+    description:
+      "List webhooks for an organization. Defaults to SNG_ORG_SLUG when organization_id is omitted.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        organization_id: { type: "string" },
+      },
+    },
+    handler: tool_list_webhooks,
+  },
+  {
+    name: "retry_webhook",
+    description: "[MUTATING] Retry a webhook delivery by id.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string" },
+      },
+      required: ["id"],
+    },
+    handler: tool_retry_webhook,
+  },
+  {
+    name: "get_packaged_cross_sells",
+    description: "Fetch packaged cross-sells for a location.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        location_id: { type: "string" },
+      },
+      required: ["location_id"],
+    },
+    handler: tool_get_packaged_cross_sells,
+  },
 ];
 
 function jsonRpcError(id, code, message, data) {
@@ -795,7 +1250,7 @@ async function handleJsonRpc(req, res) {
       JSON.stringify({
         jsonrpc: "2.0",
         id: null,
-        result: { tools: MCP_TOOLS.map(({ handler, ...rest }) => rest), nextCursor: null },
+        result: { tools: ALL_TOOLS.map(({ handler, ...rest }) => rest), nextCursor: null },
       })
     );
     return;
@@ -811,7 +1266,7 @@ async function handleJsonRpc(req, res) {
       JSON.stringify({
         jsonrpc: "2.0",
         id: null,
-        result: { tools: MCP_TOOLS.map(({ handler, ...rest }) => rest), nextCursor: null },
+        result: { tools: ALL_TOOLS.map(({ handler, ...rest }) => rest), nextCursor: null },
       })
     );
     return;
@@ -823,7 +1278,7 @@ async function handleJsonRpc(req, res) {
       JSON.stringify({
         jsonrpc: "2.0",
         id: payload?.id ?? null,
-        result: { tools: MCP_TOOLS.map(({ handler, ...rest }) => rest), nextCursor: null },
+        result: { tools: ALL_TOOLS.map(({ handler, ...rest }) => rest), nextCursor: null },
       })
     );
     return;
@@ -859,13 +1314,13 @@ async function handleJsonRpc(req, res) {
         return;
       }
       case "tools/list": {
-        respond({ tools: MCP_TOOLS.map(({ handler, ...rest }) => rest), nextCursor: null });
+        respond({ tools: ALL_TOOLS.map(({ handler, ...rest }) => rest), nextCursor: null });
         return;
       }
       case "tools/call": {
         const toolName = params.name;
         const args = params.arguments || {};
-        const tool = MCP_TOOLS.find((t) => t.name === toolName);
+        const tool = ALL_TOOLS.find((t) => t.name === toolName);
         if (!tool) {
           throw new Error(`Unknown tool: ${toolName}`);
         }
@@ -914,432 +1369,7 @@ function createTitanServer() {
 
   // List tools
   server.setRequestHandler(ListToolsRequestSchema, async () => {
-    const tools = [
-      {
-        name: "get_onboarding_price",
-        description:
-          "Look up Sweep&Go onboarding price info for a household (dogs, zip, last cleaned, optional frequency). Returns raw JSON from Sweep&Go.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            zip_code: { type: "string" },
-            number_of_dogs: { type: "number" },
-            last_time_yard_was_thoroughly_cleaned: { type: "string" },
-            clean_up_frequency: { type: "string" },
-          },
-          required: [
-            "zip_code",
-            "number_of_dogs",
-            "last_time_yard_was_thoroughly_cleaned",
-          ],
-        },
-      },
-      {
-        name: "get_packages_list",
-        description:
-          "Fetch packaged cross-sells / add-on bundles from Sweep&Go for the organization.",
-        inputSchema: {
-          type: "object",
-          properties: {},
-        },
-      },
-      {
-        name: "get_free_quotes",
-        description:
-          "Fetch all pre-configured free quotes from Sweep&Go (api/v2/free_quotes).",
-        inputSchema: {
-          type: "object",
-          properties: {},
-        },
-      },
-      {
-        name: "get_quote_recommendations",
-        description:
-          "Given dogs/zip/last cleaned (and optional frequency), fetch pricing and packages and return a human-readable summary Parker can use as a quote.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            zip_code: { type: "string" },
-            number_of_dogs: { type: "number" },
-            last_time_yard_was_thoroughly_cleaned: { type: "string" },
-            clean_up_frequency: { type: "string" },
-          },
-          required: [
-            "zip_code",
-            "number_of_dogs",
-            "last_time_yard_was_thoroughly_cleaned",
-          ],
-        },
-      },
-      {
-        name: "create_client",
-        description:
-          "[MUTATING] Create a new residential client in Sweep&Go using the onboarding form fields. Respects SNG_ALLOW_WRITES flag.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            zip_code: { type: "string" },
-            number_of_dogs: { type: "number" },
-            last_time_yard_was_thoroughly_cleaned: { type: "string" },
-            clean_up_frequency: { type: "string" },
-            initial_cleanup_required: { type: "boolean" },
-            first_name: { type: "string" },
-            last_name: { type: "string" },
-            email: { type: "string" },
-            home_address: { type: "string" },
-            city: { type: "string" },
-            state: { type: "string" },
-            home_phone_number: { type: "string" },
-            cell_phone_number: { type: "string" },
-            additional_comment: { type: "string" },
-          },
-          required: [
-            "zip_code",
-            "number_of_dogs",
-            "last_time_yard_was_thoroughly_cleaned",
-            "clean_up_frequency",
-            "initial_cleanup_required",
-            "first_name",
-            "last_name",
-            "email",
-            "home_address",
-            "city",
-            "state",
-          ],
-        },
-      },
-      {
-        name: "list_payment_methods",
-        description: "List payment methods for a specific customer.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            customer_id: { type: "string" },
-          },
-          required: ["customer_id"],
-        },
-      },
-      {
-        name: "get_payment_method",
-        description: "Fetch a single payment method by id.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            id: { type: "string" },
-          },
-          required: ["id"],
-        },
-      },
-      {
-        name: "get_payment_source",
-        description: "Fetch a payment source by id.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            id: { type: "string" },
-          },
-          required: ["id"],
-        },
-      },
-      {
-        name: "create_payment_source",
-        description:
-          "[MUTATING] Create a payment source from an existing payment method for a customer.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            customer_id: { type: "string" },
-            payment_method_id: { type: "string" },
-            default: { type: "boolean" },
-          },
-          required: ["customer_id", "payment_method_id"],
-        },
-      },
-      {
-        name: "list_pre_authorizations",
-        description: "List pre-authorizations (optionally filtered by customer).",
-        inputSchema: {
-          type: "object",
-          properties: {
-            customer_id: { type: "string" },
-          },
-        },
-      },
-      {
-        name: "get_pre_authorization",
-        description: "Fetch a pre-authorization by id.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            id: { type: "string" },
-          },
-          required: ["id"],
-        },
-      },
-      {
-        name: "create_pre_authorization",
-        description:
-          "[MUTATING] Create a pre-authorization for a customer/payment source.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            customer_id: { type: "string" },
-            amount: { type: "number" },
-            location_id: { type: "string" },
-            payment_source_id: { type: "string" },
-            external_reference: { type: "string" },
-            description: { type: "string" },
-          },
-          required: [
-            "customer_id",
-            "amount",
-            "location_id",
-            "payment_source_id",
-          ],
-        },
-      },
-      {
-        name: "delete_pre_authorization",
-        description: "[MUTATING] Delete a pre-authorization by id.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            id: { type: "string" },
-          },
-          required: ["id"],
-        },
-      },
-      {
-        name: "list_charges",
-        description: "List charges (optionally filtered by customer).",
-        inputSchema: {
-          type: "object",
-          properties: {
-            customer_id: { type: "string" },
-          },
-        },
-      },
-      {
-        name: "get_charge",
-        description: "Fetch a charge by id.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            id: { type: "string" },
-          },
-          required: ["id"],
-        },
-      },
-      {
-        name: "create_charge",
-        description:
-          "[MUTATING] Create a charge for a customer/payment source at a location.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            customer_id: { type: "string" },
-            amount: { type: "number" },
-            location_id: { type: "string" },
-            payment_source_id: { type: "string" },
-            external_reference: { type: "string" },
-            description: { type: "string" },
-          },
-          required: [
-            "customer_id",
-            "amount",
-            "location_id",
-            "payment_source_id",
-          ],
-        },
-      },
-      {
-        name: "refund_charge",
-        description:
-          "[MUTATING] Refund a charge (full or partial when amount is provided).",
-        inputSchema: {
-          type: "object",
-          properties: {
-            id: { type: "string" },
-            amount: { type: "number" },
-          },
-          required: ["id"],
-        },
-      },
-      {
-        name: "list_customers",
-        description: "List customers with optional pagination.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            page: { type: "number" },
-            per: { type: "number" },
-          },
-        },
-      },
-      {
-        name: "get_customer",
-        description: "Fetch a customer by id.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            id: { type: "string" },
-          },
-          required: ["id"],
-        },
-      },
-      {
-        name: "create_customer",
-        description: "[MUTATING] Create a customer.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            full_name: { type: "string" },
-            email: { type: "string" },
-            mobile: { type: "string" },
-            address_1: { type: "string" },
-            address_2: { type: "string" },
-            region: { type: "string" },
-            postal_code: { type: "string" },
-            notes: { type: "string" },
-          },
-          required: ["full_name", "email", "mobile"],
-        },
-      },
-      {
-        name: "update_customer",
-        description: "[MUTATING] Update customer fields (any combination).",
-        inputSchema: {
-          type: "object",
-          properties: {
-            id: { type: "string" },
-            full_name: { type: "string" },
-            email: { type: "string" },
-            mobile: { type: "string" },
-            address_1: { type: "string" },
-            address_2: { type: "string" },
-            region: { type: "string" },
-            postal_code: { type: "string" },
-            notes: { type: "string" },
-          },
-          required: ["id"],
-        },
-      },
-      {
-        name: "delete_customer",
-        description: "[MUTATING] Delete a customer by id.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            id: { type: "string" },
-          },
-          required: ["id"],
-        },
-      },
-      {
-        name: "list_locations",
-        description: "List locations with optional pagination.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            page: { type: "number" },
-            per: { type: "number" },
-          },
-        },
-      },
-      {
-        name: "get_location",
-        description: "Fetch a location by id.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            id: { type: "string" },
-          },
-          required: ["id"],
-        },
-      },
-      {
-        name: "create_location",
-        description: "[MUTATING] Create a location.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            name: { type: "string" },
-            address_1: { type: "string" },
-            address_2: { type: "string" },
-            postal_code: { type: "string" },
-            region: { type: "string" },
-            email: { type: "string" },
-            mobile: { type: "string" },
-            website: { type: "string" },
-            logo_url: { type: "string" },
-            type: { type: "string" },
-          },
-          required: [
-            "name",
-            "address_1",
-            "postal_code",
-            "region",
-            "email",
-            "mobile",
-          ],
-        },
-      },
-      {
-        name: "update_location",
-        description: "[MUTATING] Update location fields (any combination).",
-        inputSchema: {
-          type: "object",
-          properties: {
-            id: { type: "string" },
-            name: { type: "string" },
-            address_1: { type: "string" },
-            address_2: { type: "string" },
-            postal_code: { type: "string" },
-            region: { type: "string" },
-            email: { type: "string" },
-            mobile: { type: "string" },
-            website: { type: "string" },
-            logo_url: { type: "string" },
-            type: { type: "string" },
-          },
-          required: ["id"],
-        },
-      },
-      {
-        name: "list_webhooks",
-        description:
-          "List webhooks for an organization. Defaults to SNG_ORG_SLUG when organization_id is omitted.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            organization_id: { type: "string" },
-          },
-        },
-      },
-      {
-        name: "retry_webhook",
-        description: "[MUTATING] Retry a webhook delivery by id.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            id: { type: "string" },
-          },
-          required: ["id"],
-        },
-      },
-      {
-        name: "get_packaged_cross_sells",
-        description: "Fetch packaged cross-sells for a location.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            location_id: { type: "string" },
-          },
-          required: ["location_id"],
-        },
-      },
-    ];
-
+    const tools = ALL_TOOLS.map(({ handler, ...rest }) => rest);
     return { tools };
   });
 
@@ -1348,68 +1378,11 @@ function createTitanServer() {
     const name = req.params.name;
     const args = req.params.arguments || {};
 
-    switch (name) {
-      case "get_onboarding_price":
-        return { content: [await tool_get_onboarding_price(args)] };
-      case "get_packages_list":
-        return { content: [await tool_get_packages_list()] };
-      case "get_free_quotes":
-        return { content: [await tool_get_free_quotes()] };
-      case "get_quote_recommendations":
-        return { content: [await tool_get_quote_recommendations(args)] };
-      case "create_client":
-        return { content: [await tool_create_client(args)] };
-      case "list_payment_methods":
-        return { content: [await tool_list_payment_methods(args)] };
-      case "get_payment_method":
-        return { content: [await tool_get_payment_method(args)] };
-      case "get_payment_source":
-        return { content: [await tool_get_payment_source(args)] };
-      case "create_payment_source":
-        return { content: [await tool_create_payment_source(args)] };
-      case "list_pre_authorizations":
-        return { content: [await tool_list_pre_authorizations(args)] };
-      case "get_pre_authorization":
-        return { content: [await tool_get_pre_authorization(args)] };
-      case "create_pre_authorization":
-        return { content: [await tool_create_pre_authorization(args)] };
-      case "delete_pre_authorization":
-        return { content: [await tool_delete_pre_authorization(args)] };
-      case "list_charges":
-        return { content: [await tool_list_charges(args)] };
-      case "get_charge":
-        return { content: [await tool_get_charge(args)] };
-      case "create_charge":
-        return { content: [await tool_create_charge(args)] };
-      case "refund_charge":
-        return { content: [await tool_refund_charge(args)] };
-      case "list_customers":
-        return { content: [await tool_list_customers(args)] };
-      case "get_customer":
-        return { content: [await tool_get_customer(args)] };
-      case "create_customer":
-        return { content: [await tool_create_customer(args)] };
-      case "update_customer":
-        return { content: [await tool_update_customer(args)] };
-      case "delete_customer":
-        return { content: [await tool_delete_customer(args)] };
-      case "list_locations":
-        return { content: [await tool_list_locations(args)] };
-      case "get_location":
-        return { content: [await tool_get_location(args)] };
-      case "create_location":
-        return { content: [await tool_create_location(args)] };
-      case "update_location":
-        return { content: [await tool_update_location(args)] };
-      case "list_webhooks":
-        return { content: [await tool_list_webhooks(args)] };
-      case "retry_webhook":
-        return { content: [await tool_retry_webhook(args)] };
-      case "get_packaged_cross_sells":
-        return { content: [await tool_get_packaged_cross_sells(args)] };
-      default:
-        throw new Error(`Unknown tool: ${name}`);
+    const tool = ALL_TOOLS.find((t) => t.name === name);
+    if (!tool) {
+      throw new Error(`Unknown tool: ${name}`);
     }
+    return { content: [await tool.handler(args)] };
   });
 
   return server;
@@ -1497,7 +1470,7 @@ const httpServer = http.createServer(async (req, res) => {
         JSON.stringify({
           jsonrpc: "2.0",
           id: null,
-          result: { tools: MCP_TOOLS.map(({ handler, ...rest }) => rest), nextCursor: null },
+          result: { tools: ALL_TOOLS.map(({ handler, ...rest }) => rest), nextCursor: null },
         })
       );
       return;
