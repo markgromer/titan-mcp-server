@@ -635,7 +635,7 @@ async function tool_get_packaged_cross_sells(args) {
 // MCP HTTP (JSON-RPC) support
 // ---------------------------------------------------------------------------
 
-const MCP_PROTOCOL_VERSION = "2024-11-05";
+const MCP_PROTOCOL_VERSION = "2025-06-18";
 
 const MCP_TOOLS = [
   {
@@ -841,8 +841,8 @@ async function handleJsonRpc(req, res) {
           serverInfo: { name: "titan-sweepandgo", version: "1.0.0" },
           capabilities: {
             tools: { listChanged: false },
-            resources: { supported: false },
-            prompts: { supported: false },
+            resources: {},
+            prompts: {},
           },
         });
         return;
