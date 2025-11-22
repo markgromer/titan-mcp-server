@@ -112,6 +112,17 @@ function authFailed(req) {
   return token !== MCP_TOKEN;
 }
 
+function setCors(req, res) {
+  const origin = req.headers.origin || "*";
+  res.setHeader("Access-Control-Allow-Origin", origin);
+  res.setHeader(
+    "Access-Control-Allow-Headers",
+    "Content-Type, Accept, Authorization, X-Requested-With"
+  );
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Credentials", "true");
+}
+
 // ---------------------------------------------------------------------------
 // Tool schemas
 // ---------------------------------------------------------------------------
@@ -763,9 +774,7 @@ function jsonRpcError(id, code, message, data) {
 }
 
 async function handleJsonRpc(req, res) {
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Accept, Authorization");
-  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  setCors(req, res);
 
   const raw = await readRequestBody(req);
   const rawTrimmed = raw?.trim() || "";
@@ -1419,19 +1428,19 @@ const transports = new Map();
 const httpServer = http.createServer(async (req, res) => {
   // Well-known discovery
   if (req.method === "OPTIONS" && req.url === "/.well-known/mcp.json") {
+    setCors(req, res);
     res.writeHead(204, {
-      "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Headers": "Content-Type, Accept, Authorization",
+      "Access-Control-Allow-Origin": req.headers.origin || "*",
+      "Access-Control-Allow-Headers": "Content-Type, Accept, Authorization, X-Requested-With",
       "Access-Control-Allow-Methods": "GET, OPTIONS",
+      "Access-Control-Allow-Credentials": "true",
     });
     res.end();
     return;
   }
 
   if (req.method === "GET" && req.url === "/.well-known/mcp.json") {
-    res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Accept, Authorization");
-    res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+    setCors(req, res);
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(
       JSON.stringify({
@@ -1464,10 +1473,12 @@ const httpServer = http.createServer(async (req, res) => {
 
   // Allow preflight for browsers/clients
   if (req.method === "OPTIONS") {
+    setCors(req, res);
     res.writeHead(204, {
-      "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Headers": "Content-Type, Accept, Authorization",
+      "Access-Control-Allow-Origin": req.headers.origin || "*",
+      "Access-Control-Allow-Headers": "Content-Type, Accept, Authorization, X-Requested-With",
       "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+      "Access-Control-Allow-Credentials": "true",
     });
     res.end();
     return;
@@ -1483,7 +1494,7 @@ const httpServer = http.createServer(async (req, res) => {
       (req.headers["accept"] || "").toLowerCase().includes("application/json");
     const hasSession = Boolean(sessionId);
     if (!hasSession && acceptsJson) {
-      res.setHeader("Access-Control-Allow-Origin", "*");
+      setCors(req, res);
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(
         JSON.stringify({
@@ -1495,7 +1506,7 @@ const httpServer = http.createServer(async (req, res) => {
       return;
     }
 
-    res.setHeader("Access-Control-Allow-Origin", "*");
+    setCors(req, res);
     res.setHeader("Cache-Control", "no-cache");
 
     const transport = new SSEServerTransport(MCP_PATH, res);
@@ -1521,7 +1532,7 @@ const httpServer = http.createServer(async (req, res) => {
 
   // Incoming messages (POST)
   if (req.method === "POST") {
-    res.setHeader("Access-Control-Allow-Origin", "*");
+    setCors(req, res);
 
     // JSON-RPC MCP over HTTP (no sessionId)
     if (!sessionId) {
