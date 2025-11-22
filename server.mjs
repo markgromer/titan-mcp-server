@@ -770,21 +770,44 @@ async function handleJsonRpc(req, res) {
   }
 
   const raw = await readRequestBody(req);
+  const rawTrimmed = raw?.trim() || "";
+  // Some clients send empty bodies; default to tools/list for compatibility
+  if (!rawTrimmed) {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: null,
+        result: { tools: MCP_TOOLS.map(({ handler, ...rest }) => rest), nextCursor: null },
+      })
+    );
+    return;
+  }
+
   let payload;
   try {
-    payload = JSON.parse(raw);
+    payload = JSON.parse(rawTrimmed);
   } catch (err) {
-    res.writeHead(400, { "Content-Type": "application/json" });
+    // On parse error, fall back to tools/list to be forgiving
+    res.writeHead(200, { "Content-Type": "application/json" });
     res.end(
-      JSON.stringify(jsonRpcError(null, -32700, "Parse error: invalid JSON"))
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: null,
+        result: { tools: MCP_TOOLS.map(({ handler, ...rest }) => rest), nextCursor: null },
+      })
     );
     return;
   }
 
   if (!payload || payload.jsonrpc !== "2.0" || !payload.method) {
-    res.writeHead(400, { "Content-Type": "application/json" });
+    res.writeHead(200, { "Content-Type": "application/json" });
     res.end(
-      JSON.stringify(jsonRpcError(payload?.id, -32600, "Invalid Request"))
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: payload?.id ?? null,
+        result: { tools: MCP_TOOLS.map(({ handler, ...rest }) => rest), nextCursor: null },
+      })
     );
     return;
   }
