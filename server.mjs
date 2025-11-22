@@ -44,16 +44,16 @@ async function sngRequest(path, { method = "GET", query, body } = {}) {
     }
   }
 
-// Automatically inject organization identifier if available and not already provided
-if (ORG_SLUG) {
-  if (!url.searchParams.has("organization_slug")) {
-    url.searchParams.set("organization_slug", ORG_SLUG);
+  // Automatically inject organization identifier if available and not already provided
+  if (ORG_SLUG) {
+    if (!url.searchParams.has("organization_slug")) {
+      url.searchParams.set("organization_slug", ORG_SLUG);
+    }
+    // Some endpoints expect `organization` instead of `organization_slug`
+    if (!url.searchParams.has("organization")) {
+      url.searchParams.set("organization", ORG_SLUG);
+    }
   }
-  // Some endpoints expect `organization` instead of `organization_slug`
-  if (!url.searchParams.has("organization")) {
-    url.searchParams.set("organization", ORG_SLUG);
-  }
-}
 
   const headers = {
     Authorization: `Bearer ${SNG_API_KEY}`,
@@ -75,7 +75,18 @@ if (ORG_SLUG) {
     );
   }
 
-  return res.json();
+  if (res.status === 204) {
+    return {};
+  }
+
+  const contentType = res.headers.get("content-type") || "";
+  if (!contentType.toLowerCase().includes("application/json")) {
+    return res.text();
+  }
+
+  const text = await res.text();
+  if (!text) return {};
+  return JSON.parse(text);
 }
 
 // ---------------------------------------------------------------------------
@@ -120,6 +131,112 @@ const OnboardingPriceInputSchema = ZipDogsSchema.extend({
     ])
     .optional()
     .describe("Desired service frequency, if known"),
+});
+
+// Shared helpers / schemas
+function writesDisabledResponse() {
+  return {
+    type: "text",
+    text:
+      "Writes are disabled for this MCP server. Set SNG_ALLOW_WRITES=true in .env if you really want Parker to perform write operations.",
+  };
+}
+
+const PaymentMethodsListSchema = z.object({
+  customer_id: z.string(),
+});
+
+const IdSchema = z.object({ id: z.string() });
+
+const PaymentSourceCreateSchema = z.object({
+  customer_id: z.string(),
+  payment_method_id: z.string(),
+  default: z.boolean().optional(),
+});
+
+const PreAuthorizationListSchema = z.object({
+  customer_id: z.string().optional(),
+});
+
+const PreAuthorizationCreateSchema = z.object({
+  customer_id: z.string(),
+  amount: z.number().int().positive(),
+  location_id: z.string(),
+  payment_source_id: z.string(),
+  external_reference: z.string().optional(),
+  description: z.string().optional(),
+});
+
+const ChargeListSchema = z.object({
+  customer_id: z.string().optional(),
+});
+
+const ChargeCreateSchema = z.object({
+  customer_id: z.string(),
+  amount: z.number().int().positive(),
+  location_id: z.string(),
+  payment_source_id: z.string(),
+  external_reference: z.string().optional(),
+  description: z.string().optional(),
+});
+
+const RefundSchema = z.object({
+  id: z.string(),
+  amount: z.number().int().positive().optional(),
+});
+
+const CustomerListSchema = z.object({
+  page: z.number().int().positive().optional(),
+  per: z.number().int().positive().optional(),
+});
+
+const CustomerCreateSchema = z.object({
+  full_name: z.string(),
+  email: z.string(),
+  mobile: z.string(),
+  address_1: z.string().optional(),
+  address_2: z.string().optional(),
+  region: z.string().optional(),
+  postal_code: z.string().optional(),
+  notes: z.string().optional(),
+});
+
+const CustomerUpdateSchema = CustomerCreateSchema.partial().refine(
+  (val) => Object.keys(val).length > 0,
+  { message: "Provide at least one field to update." }
+);
+
+const LocationListSchema = CustomerListSchema;
+
+const LocationCreateSchema = z.object({
+  name: z.string(),
+  address_1: z.string(),
+  postal_code: z.string(),
+  region: z.string(),
+  email: z.string(),
+  mobile: z.string(),
+  address_2: z.string().optional(),
+  website: z.string().optional(),
+  logo_url: z.string().optional(),
+  type: z.string().optional(),
+});
+
+const LocationUpdateSchema = LocationCreateSchema.partial().refine(
+  (val) => Object.keys(val).length > 0,
+  { message: "Provide at least one field to update." }
+);
+
+const WebhookListSchema = z
+  .object({
+    organization_id: z.string().optional(),
+  })
+  .refine(
+    (val) => Boolean(val.organization_id || ORG_SLUG),
+    "organization_id is required unless SNG_ORG_SLUG is set"
+  );
+
+const PackagedCrossSellsSchema = z.object({
+  location_id: z.string(),
 });
 
 // ---------------------------------------------------------------------------
@@ -258,6 +375,238 @@ async function tool_create_client(args) {
   };
 }
 
+// Payment methods
+async function tool_list_payment_methods(args) {
+  const input = PaymentMethodsListSchema.parse(args);
+  const data = await sngRequest("/api/v1/payment_methods", {
+    method: "GET",
+    query: { customer_id: input.customer_id },
+  });
+  return { type: "text", text: JSON.stringify(data, null, 2) };
+}
+
+async function tool_get_payment_method(args) {
+  const input = IdSchema.parse(args);
+  const data = await sngRequest(`/api/v1/payment_methods/${input.id}`, {
+    method: "GET",
+  });
+  return { type: "text", text: JSON.stringify(data, null, 2) };
+}
+
+// Payment sources
+async function tool_get_payment_source(args) {
+  const input = IdSchema.parse(args);
+  const data = await sngRequest(`/api/v1/payment_sources/${input.id}`, {
+    method: "GET",
+  });
+  return { type: "text", text: JSON.stringify(data, null, 2) };
+}
+
+async function tool_create_payment_source(args) {
+  if (!ALLOW_WRITES) return writesDisabledResponse();
+  const input = PaymentSourceCreateSchema.parse(args);
+  const data = await sngRequest("/api/v1/payment_sources", {
+    method: "POST",
+    body: input,
+  });
+  return { type: "text", text: JSON.stringify(data, null, 2) };
+}
+
+// Pre-authorizations
+async function tool_list_pre_authorizations(args) {
+  const input = PreAuthorizationListSchema.parse(args || {});
+  const data = await sngRequest("/api/v1/pre_authorizations", {
+    method: "GET",
+    query: input,
+  });
+  return { type: "text", text: JSON.stringify(data, null, 2) };
+}
+
+async function tool_get_pre_authorization(args) {
+  const input = IdSchema.parse(args);
+  const data = await sngRequest(`/api/v1/pre_authorizations/${input.id}`, {
+    method: "GET",
+  });
+  return { type: "text", text: JSON.stringify(data, null, 2) };
+}
+
+async function tool_create_pre_authorization(args) {
+  if (!ALLOW_WRITES) return writesDisabledResponse();
+  const input = PreAuthorizationCreateSchema.parse(args);
+  const data = await sngRequest("/api/v1/pre_authorizations", {
+    method: "POST",
+    body: input,
+  });
+  return { type: "text", text: JSON.stringify(data, null, 2) };
+}
+
+async function tool_delete_pre_authorization(args) {
+  if (!ALLOW_WRITES) return writesDisabledResponse();
+  const input = IdSchema.parse(args);
+  const data = await sngRequest(`/api/v1/pre_authorizations/${input.id}`, {
+    method: "DELETE",
+  });
+  return { type: "text", text: JSON.stringify(data, null, 2) };
+}
+
+// Charges
+async function tool_list_charges(args) {
+  const input = ChargeListSchema.parse(args || {});
+  const data = await sngRequest("/api/v1/charges", {
+    method: "GET",
+    query: input,
+  });
+  return { type: "text", text: JSON.stringify(data, null, 2) };
+}
+
+async function tool_get_charge(args) {
+  const input = IdSchema.parse(args);
+  const data = await sngRequest(`/api/v1/charges/${input.id}`, {
+    method: "GET",
+  });
+  return { type: "text", text: JSON.stringify(data, null, 2) };
+}
+
+async function tool_create_charge(args) {
+  if (!ALLOW_WRITES) return writesDisabledResponse();
+  const input = ChargeCreateSchema.parse(args);
+  const data = await sngRequest("/api/v1/charges", {
+    method: "POST",
+    body: input,
+  });
+  return { type: "text", text: JSON.stringify(data, null, 2) };
+}
+
+async function tool_refund_charge(args) {
+  if (!ALLOW_WRITES) return writesDisabledResponse();
+  const input = RefundSchema.parse(args);
+  const body = input.amount !== undefined ? { amount: input.amount } : undefined;
+  const data = await sngRequest(`/api/v1/charges/${input.id}/refund`, {
+    method: "POST",
+    body,
+  });
+  return { type: "text", text: JSON.stringify(data, null, 2) };
+}
+
+// Customers
+async function tool_list_customers(args) {
+  const input = CustomerListSchema.parse(args || {});
+  const data = await sngRequest("/api/v1/customers", {
+    method: "GET",
+    query: input,
+  });
+  return { type: "text", text: JSON.stringify(data, null, 2) };
+}
+
+async function tool_get_customer(args) {
+  const input = IdSchema.parse(args);
+  const data = await sngRequest(`/api/v1/customers/${input.id}`, {
+    method: "GET",
+  });
+  return { type: "text", text: JSON.stringify(data, null, 2) };
+}
+
+async function tool_create_customer(args) {
+  if (!ALLOW_WRITES) return writesDisabledResponse();
+  const input = CustomerCreateSchema.parse(args);
+  const data = await sngRequest("/api/v1/customers", {
+    method: "POST",
+    body: input,
+  });
+  return { type: "text", text: JSON.stringify(data, null, 2) };
+}
+
+async function tool_update_customer(args) {
+  if (!ALLOW_WRITES) return writesDisabledResponse();
+  const { id, ...rest } = { ...(args || {}) };
+  const idInput = IdSchema.parse({ id });
+  const input = CustomerUpdateSchema.parse(rest);
+  const data = await sngRequest(`/api/v1/customers/${idInput.id}`, {
+    method: "PUT",
+    body: input,
+  });
+  return { type: "text", text: JSON.stringify(data, null, 2) };
+}
+
+async function tool_delete_customer(args) {
+  if (!ALLOW_WRITES) return writesDisabledResponse();
+  const input = IdSchema.parse(args);
+  const data = await sngRequest(`/api/v1/customers/${input.id}`, {
+    method: "DELETE",
+  });
+  return { type: "text", text: JSON.stringify(data, null, 2) };
+}
+
+// Locations
+async function tool_list_locations(args) {
+  const input = LocationListSchema.parse(args || {});
+  const data = await sngRequest("/api/v1/locations", {
+    method: "GET",
+    query: input,
+  });
+  return { type: "text", text: JSON.stringify(data, null, 2) };
+}
+
+async function tool_get_location(args) {
+  const input = IdSchema.parse(args);
+  const data = await sngRequest(`/api/v1/locations/${input.id}`, {
+    method: "GET",
+  });
+  return { type: "text", text: JSON.stringify(data, null, 2) };
+}
+
+async function tool_create_location(args) {
+  if (!ALLOW_WRITES) return writesDisabledResponse();
+  const input = LocationCreateSchema.parse(args);
+  const data = await sngRequest("/api/v1/locations", {
+    method: "POST",
+    body: input,
+  });
+  return { type: "text", text: JSON.stringify(data, null, 2) };
+}
+
+async function tool_update_location(args) {
+  if (!ALLOW_WRITES) return writesDisabledResponse();
+  const { id, ...rest } = { ...(args || {}) };
+  const idInput = IdSchema.parse({ id });
+  const input = LocationUpdateSchema.parse(rest);
+  const data = await sngRequest(`/api/v1/locations/${idInput.id}`, {
+    method: "PUT",
+    body: input,
+  });
+  return { type: "text", text: JSON.stringify(data, null, 2) };
+}
+
+// Webhooks
+async function tool_list_webhooks(args) {
+  const input = WebhookListSchema.parse(args || {});
+  const organization_id = input.organization_id || ORG_SLUG;
+  const data = await sngRequest("/api/v1/webhooks", {
+    method: "GET",
+    query: { organization_id },
+  });
+  return { type: "text", text: JSON.stringify(data, null, 2) };
+}
+
+async function tool_retry_webhook(args) {
+  if (!ALLOW_WRITES) return writesDisabledResponse();
+  const input = IdSchema.parse(args);
+  const data = await sngRequest(`/api/v1/webhooks/${input.id}/retry`, {
+    method: "PUT",
+  });
+  return { type: "text", text: JSON.stringify(data, null, 2) };
+}
+
+// Packaged cross-sells
+async function tool_get_packaged_cross_sells(args) {
+  const input = PackagedCrossSellsSchema.parse(args);
+  const data = await sngRequest("/api/v1/packaged_cross_sells", {
+    method: "GET",
+    query: input,
+  });
+  return { type: "text", text: JSON.stringify(data, null, 2) };
+}
+
 // ---------------------------------------------------------------------------
 // MCP server setup
 // ---------------------------------------------------------------------------
@@ -369,6 +718,336 @@ function createTitanServer() {
           ],
         },
       },
+      {
+        name: "list_payment_methods",
+        description: "List payment methods for a specific customer.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            customer_id: { type: "string" },
+          },
+          required: ["customer_id"],
+        },
+      },
+      {
+        name: "get_payment_method",
+        description: "Fetch a single payment method by id.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            id: { type: "string" },
+          },
+          required: ["id"],
+        },
+      },
+      {
+        name: "get_payment_source",
+        description: "Fetch a payment source by id.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            id: { type: "string" },
+          },
+          required: ["id"],
+        },
+      },
+      {
+        name: "create_payment_source",
+        description:
+          "[MUTATING] Create a payment source from an existing payment method for a customer.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            customer_id: { type: "string" },
+            payment_method_id: { type: "string" },
+            default: { type: "boolean" },
+          },
+          required: ["customer_id", "payment_method_id"],
+        },
+      },
+      {
+        name: "list_pre_authorizations",
+        description: "List pre-authorizations (optionally filtered by customer).",
+        inputSchema: {
+          type: "object",
+          properties: {
+            customer_id: { type: "string" },
+          },
+        },
+      },
+      {
+        name: "get_pre_authorization",
+        description: "Fetch a pre-authorization by id.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            id: { type: "string" },
+          },
+          required: ["id"],
+        },
+      },
+      {
+        name: "create_pre_authorization",
+        description:
+          "[MUTATING] Create a pre-authorization for a customer/payment source.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            customer_id: { type: "string" },
+            amount: { type: "number" },
+            location_id: { type: "string" },
+            payment_source_id: { type: "string" },
+            external_reference: { type: "string" },
+            description: { type: "string" },
+          },
+          required: [
+            "customer_id",
+            "amount",
+            "location_id",
+            "payment_source_id",
+          ],
+        },
+      },
+      {
+        name: "delete_pre_authorization",
+        description: "[MUTATING] Delete a pre-authorization by id.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            id: { type: "string" },
+          },
+          required: ["id"],
+        },
+      },
+      {
+        name: "list_charges",
+        description: "List charges (optionally filtered by customer).",
+        inputSchema: {
+          type: "object",
+          properties: {
+            customer_id: { type: "string" },
+          },
+        },
+      },
+      {
+        name: "get_charge",
+        description: "Fetch a charge by id.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            id: { type: "string" },
+          },
+          required: ["id"],
+        },
+      },
+      {
+        name: "create_charge",
+        description:
+          "[MUTATING] Create a charge for a customer/payment source at a location.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            customer_id: { type: "string" },
+            amount: { type: "number" },
+            location_id: { type: "string" },
+            payment_source_id: { type: "string" },
+            external_reference: { type: "string" },
+            description: { type: "string" },
+          },
+          required: [
+            "customer_id",
+            "amount",
+            "location_id",
+            "payment_source_id",
+          ],
+        },
+      },
+      {
+        name: "refund_charge",
+        description:
+          "[MUTATING] Refund a charge (full or partial when amount is provided).",
+        inputSchema: {
+          type: "object",
+          properties: {
+            id: { type: "string" },
+            amount: { type: "number" },
+          },
+          required: ["id"],
+        },
+      },
+      {
+        name: "list_customers",
+        description: "List customers with optional pagination.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            page: { type: "number" },
+            per: { type: "number" },
+          },
+        },
+      },
+      {
+        name: "get_customer",
+        description: "Fetch a customer by id.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            id: { type: "string" },
+          },
+          required: ["id"],
+        },
+      },
+      {
+        name: "create_customer",
+        description: "[MUTATING] Create a customer.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            full_name: { type: "string" },
+            email: { type: "string" },
+            mobile: { type: "string" },
+            address_1: { type: "string" },
+            address_2: { type: "string" },
+            region: { type: "string" },
+            postal_code: { type: "string" },
+            notes: { type: "string" },
+          },
+          required: ["full_name", "email", "mobile"],
+        },
+      },
+      {
+        name: "update_customer",
+        description: "[MUTATING] Update customer fields (any combination).",
+        inputSchema: {
+          type: "object",
+          properties: {
+            id: { type: "string" },
+            full_name: { type: "string" },
+            email: { type: "string" },
+            mobile: { type: "string" },
+            address_1: { type: "string" },
+            address_2: { type: "string" },
+            region: { type: "string" },
+            postal_code: { type: "string" },
+            notes: { type: "string" },
+          },
+          required: ["id"],
+        },
+      },
+      {
+        name: "delete_customer",
+        description: "[MUTATING] Delete a customer by id.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            id: { type: "string" },
+          },
+          required: ["id"],
+        },
+      },
+      {
+        name: "list_locations",
+        description: "List locations with optional pagination.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            page: { type: "number" },
+            per: { type: "number" },
+          },
+        },
+      },
+      {
+        name: "get_location",
+        description: "Fetch a location by id.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            id: { type: "string" },
+          },
+          required: ["id"],
+        },
+      },
+      {
+        name: "create_location",
+        description: "[MUTATING] Create a location.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            name: { type: "string" },
+            address_1: { type: "string" },
+            address_2: { type: "string" },
+            postal_code: { type: "string" },
+            region: { type: "string" },
+            email: { type: "string" },
+            mobile: { type: "string" },
+            website: { type: "string" },
+            logo_url: { type: "string" },
+            type: { type: "string" },
+          },
+          required: [
+            "name",
+            "address_1",
+            "postal_code",
+            "region",
+            "email",
+            "mobile",
+          ],
+        },
+      },
+      {
+        name: "update_location",
+        description: "[MUTATING] Update location fields (any combination).",
+        inputSchema: {
+          type: "object",
+          properties: {
+            id: { type: "string" },
+            name: { type: "string" },
+            address_1: { type: "string" },
+            address_2: { type: "string" },
+            postal_code: { type: "string" },
+            region: { type: "string" },
+            email: { type: "string" },
+            mobile: { type: "string" },
+            website: { type: "string" },
+            logo_url: { type: "string" },
+            type: { type: "string" },
+          },
+          required: ["id"],
+        },
+      },
+      {
+        name: "list_webhooks",
+        description:
+          "List webhooks for an organization. Defaults to SNG_ORG_SLUG when organization_id is omitted.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            organization_id: { type: "string" },
+          },
+        },
+      },
+      {
+        name: "retry_webhook",
+        description: "[MUTATING] Retry a webhook delivery by id.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            id: { type: "string" },
+          },
+          required: ["id"],
+        },
+      },
+      {
+        name: "get_packaged_cross_sells",
+        description: "Fetch packaged cross-sells for a location.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            location_id: { type: "string" },
+          },
+          required: ["location_id"],
+        },
+      },
     ];
 
     return { tools };
@@ -390,6 +1069,54 @@ function createTitanServer() {
         return { content: [await tool_get_quote_recommendations(args)] };
       case "create_client":
         return { content: [await tool_create_client(args)] };
+      case "list_payment_methods":
+        return { content: [await tool_list_payment_methods(args)] };
+      case "get_payment_method":
+        return { content: [await tool_get_payment_method(args)] };
+      case "get_payment_source":
+        return { content: [await tool_get_payment_source(args)] };
+      case "create_payment_source":
+        return { content: [await tool_create_payment_source(args)] };
+      case "list_pre_authorizations":
+        return { content: [await tool_list_pre_authorizations(args)] };
+      case "get_pre_authorization":
+        return { content: [await tool_get_pre_authorization(args)] };
+      case "create_pre_authorization":
+        return { content: [await tool_create_pre_authorization(args)] };
+      case "delete_pre_authorization":
+        return { content: [await tool_delete_pre_authorization(args)] };
+      case "list_charges":
+        return { content: [await tool_list_charges(args)] };
+      case "get_charge":
+        return { content: [await tool_get_charge(args)] };
+      case "create_charge":
+        return { content: [await tool_create_charge(args)] };
+      case "refund_charge":
+        return { content: [await tool_refund_charge(args)] };
+      case "list_customers":
+        return { content: [await tool_list_customers(args)] };
+      case "get_customer":
+        return { content: [await tool_get_customer(args)] };
+      case "create_customer":
+        return { content: [await tool_create_customer(args)] };
+      case "update_customer":
+        return { content: [await tool_update_customer(args)] };
+      case "delete_customer":
+        return { content: [await tool_delete_customer(args)] };
+      case "list_locations":
+        return { content: [await tool_list_locations(args)] };
+      case "get_location":
+        return { content: [await tool_get_location(args)] };
+      case "create_location":
+        return { content: [await tool_create_location(args)] };
+      case "update_location":
+        return { content: [await tool_update_location(args)] };
+      case "list_webhooks":
+        return { content: [await tool_list_webhooks(args)] };
+      case "retry_webhook":
+        return { content: [await tool_retry_webhook(args)] };
+      case "get_packaged_cross_sells":
+        return { content: [await tool_get_packaged_cross_sells(args)] };
       default:
         throw new Error(`Unknown tool: ${name}`);
     }
