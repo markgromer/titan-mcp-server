@@ -22,6 +22,7 @@ const CRM_BASE_URL =
 const SNG_API_KEY = process.env.SNG_API_KEY || "";
 const ALLOW_WRITES = String(process.env.SNG_ALLOW_WRITES || "false") === "true";
 const ORG_SLUG = process.env.SNG_ORG_SLUG || process.env.SNG_ORGANIZATION || "";
+const MCP_TOKEN = process.env.SNG_MCP_TOKEN || process.env.MCP_TOKEN || "";
 
 if (!SNG_API_KEY) {
   console.warn(
@@ -87,6 +88,26 @@ async function sngRequest(path, { method = "GET", query, body } = {}) {
   const text = await res.text();
   if (!text) return {};
   return JSON.parse(text);
+}
+
+// Basic HTTP helpers
+async function readRequestBody(req) {
+  return new Promise((resolve, reject) => {
+    let data = "";
+    req.on("data", (chunk) => {
+      data += chunk;
+    });
+    req.on("end", () => resolve(data));
+    req.on("error", reject);
+  });
+}
+
+function authFailed(req) {
+  if (!MCP_TOKEN) return false;
+  const header = req.headers["authorization"];
+  if (!header || !header.startsWith("Bearer ")) return true;
+  const token = header.slice("Bearer ".length);
+  return token !== MCP_TOKEN;
 }
 
 // ---------------------------------------------------------------------------
@@ -606,6 +627,224 @@ async function tool_get_packaged_cross_sells(args) {
     query: input,
   });
   return { type: "text", text: JSON.stringify(data, null, 2) };
+}
+
+// ---------------------------------------------------------------------------
+// MCP HTTP (JSON-RPC) support
+// ---------------------------------------------------------------------------
+
+const MCP_PROTOCOL_VERSION = "2024-11-05";
+
+const MCP_TOOLS = [
+  {
+    name: "sweepgo_get_onboarding_price",
+    description: "Get onboarding price for a residential Sweep&Go client.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        zip_code: { type: "string", description: "5-digit zip code" },
+        number_of_dogs: { type: "integer", minimum: 1 },
+        last_time_yard_was_thoroughly_cleaned: {
+          type: "string",
+          enum: [
+            "one_week",
+            "two_weeks",
+            "three_weeks",
+            "one_month",
+            "two_months",
+            "3-4_months",
+            "5-6_months",
+            "7-9_months",
+            "10+_months",
+          ],
+        },
+        clean_up_frequency: {
+          type: "string",
+          enum: [
+            "seven_times_a_week",
+            "six_times_a_week",
+            "five_times_a_week",
+            "four_times_a_week",
+            "three_times_a_week",
+            "two_times_a_week",
+            "once_a_week",
+            "every_other_week",
+            "once_every_four_weeks",
+            "once_a_month",
+          ],
+        },
+      },
+      required: [
+        "zip_code",
+        "number_of_dogs",
+        "last_time_yard_was_thoroughly_cleaned",
+        "clean_up_frequency",
+      ],
+    },
+    handler: tool_get_onboarding_price,
+  },
+  {
+    name: "sweepgo_get_quote_recommendations",
+    description:
+      "Return a human-readable quote summary Parker can read to the customer.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        zip_code: { type: "string" },
+        number_of_dogs: { type: "integer", minimum: 1 },
+        last_time_yard_was_thoroughly_cleaned: { type: "string" },
+        clean_up_frequency: { type: "string" },
+      },
+      required: [
+        "zip_code",
+        "number_of_dogs",
+        "last_time_yard_was_thoroughly_cleaned",
+      ],
+    },
+    handler: tool_get_quote_recommendations,
+  },
+  {
+    name: "sweepgo_get_packages_list",
+    description: "Fetch packaged cross-sells / add-on bundles.",
+    inputSchema: {
+      type: "object",
+      properties: {},
+    },
+    handler: tool_get_packages_list,
+  },
+  {
+    name: "sweepgo_create_client",
+    description:
+      "Create a new residential Sweep&Go client in Sweep&Go (requires SNG_ALLOW_WRITES=true).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        zip_code: { type: "string" },
+        number_of_dogs: { type: "integer", minimum: 1 },
+        last_time_yard_was_thoroughly_cleaned: { type: "string" },
+        clean_up_frequency: { type: "string" },
+        initial_cleanup_required: { type: "boolean" },
+        first_name: { type: "string" },
+        last_name: { type: "string" },
+        email: { type: "string", format: "email" },
+        home_address: { type: "string" },
+        city: { type: "string" },
+        state: { type: "string" },
+        home_phone_number: { type: "string" },
+        cell_phone_number: { type: "string" },
+        additional_comment: { type: "string" },
+      },
+      required: [
+        "zip_code",
+        "number_of_dogs",
+        "last_time_yard_was_thoroughly_cleaned",
+        "clean_up_frequency",
+        "initial_cleanup_required",
+        "first_name",
+        "last_name",
+        "email",
+        "home_address",
+        "city",
+        "state",
+      ],
+    },
+    handler: tool_create_client,
+  },
+];
+
+function jsonRpcError(id, code, message, data) {
+  return {
+    jsonrpc: "2.0",
+    id: id ?? null,
+    error: { code, message, data },
+  };
+}
+
+async function handleJsonRpc(req, res) {
+  if (authFailed(req)) {
+    res.writeHead(401, { "Content-Type": "application/json" });
+    res.end(
+      JSON.stringify(jsonRpcError(null, -32600, "Unauthorized: invalid token"))
+    );
+    return;
+  }
+
+  const raw = await readRequestBody(req);
+  let payload;
+  try {
+    payload = JSON.parse(raw);
+  } catch (err) {
+    res.writeHead(400, { "Content-Type": "application/json" });
+    res.end(
+      JSON.stringify(jsonRpcError(null, -32700, "Parse error: invalid JSON"))
+    );
+    return;
+  }
+
+  if (!payload || payload.jsonrpc !== "2.0" || !payload.method) {
+    res.writeHead(400, { "Content-Type": "application/json" });
+    res.end(
+      JSON.stringify(jsonRpcError(payload?.id, -32600, "Invalid Request"))
+    );
+    return;
+  }
+
+  const id = payload.id ?? null;
+  const method = payload.method;
+  const params = payload.params || {};
+
+  const respond = (result) => {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ jsonrpc: "2.0", id, result }));
+  };
+
+  try {
+    switch (method) {
+      case "initialize": {
+        respond({
+          protocolVersion: MCP_PROTOCOL_VERSION,
+          serverInfo: { name: "titan-sweepandgo", version: "1.0.0" },
+          capabilities: {
+            tools: { listChanged: false },
+          },
+        });
+        return;
+      }
+      case "tools/list": {
+        respond({ tools: MCP_TOOLS.map(({ handler, ...rest }) => rest), nextCursor: null });
+        return;
+      }
+      case "tools/call": {
+        const toolName = params.name;
+        const args = params.arguments || {};
+        const tool = MCP_TOOLS.find((t) => t.name === toolName);
+        if (!tool) {
+          throw new Error(`Unknown tool: ${toolName}`);
+        }
+        const content = await tool.handler(args);
+        respond({ content: [content] });
+        return;
+      }
+      default:
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify(jsonRpcError(id, -32601, "Method not found"))
+        );
+        return;
+    }
+  } catch (err) {
+    const message = err?.message || "Server error";
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id,
+        result: {
+          content: [{ type: "text", text: message, isError: true }],
+        },
+      })
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1136,6 +1375,20 @@ const mcpServer = createTitanServer();
 const transports = new Map();
 
 const httpServer = http.createServer(async (req, res) => {
+  // Well-known discovery
+  if (req.method === "GET" && req.url === "/.well-known/mcp.json") {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(
+      JSON.stringify({
+        mcpServer: {
+          version: MCP_PROTOCOL_VERSION,
+          endpoints: [{ url: `${req.headers["x-forwarded-proto"] || "http"}://${req.headers.host}${MCP_PATH}`, protocol: "http" }],
+        },
+      })
+    );
+    return;
+  }
+
   // Simple health check on root for Render/uptime probes
   if (req.url === "/" && req.method === "GET") {
     res.writeHead(200, { "Content-Type": "text/plain" });
@@ -1198,18 +1451,22 @@ const httpServer = http.createServer(async (req, res) => {
   if (req.method === "POST") {
     res.setHeader("Access-Control-Allow-Origin", "*");
 
+    // JSON-RPC MCP over HTTP (no sessionId)
     if (!sessionId) {
-      res.writeHead(400, { "Content-Type": "application/json" });
-      res.end(
-        JSON.stringify({
-          jsonrpc: "2.0",
-          error: { code: -32000, message: "Missing sessionId" },
-          id: null,
-        })
-      );
-      return;
+      const contentType = req.headers["content-type"] || "";
+      if (!contentType.toLowerCase().includes("application/json")) {
+        res.writeHead(415, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify(
+            jsonRpcError(null, -32600, "Unsupported Content-Type; expected application/json")
+          )
+        );
+        return;
+      }
+      return handleJsonRpc(req, res);
     }
 
+    // SSE POST messages with session
     const transport = transports.get(sessionId);
     if (!transport) {
       res.writeHead(404, { "Content-Type": "application/json" });
