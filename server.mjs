@@ -30,11 +30,13 @@ if (!SNG_API_KEY) {
   );
 }
 
-// ---------------------------------------------------------------------------
 // Simple HTTP helper (uses global fetch - Node 18+)
-// ---------------------------------------------------------------------------
-
-async function sngRequest(path, { method = "GET", query, body } = {}) {
+// Accept optional per-request `apiKey` and `orgSlug`. If not provided,
+// fall back to global env vars `SNG_API_KEY` and `ORG_SLUG`.
+async function sngRequest(
+  path,
+  { method = "GET", query, body, apiKey, orgSlug } = {}
+) {
   const url = new URL(path, CRM_BASE_URL);
 
   if (query) {
@@ -45,39 +47,44 @@ async function sngRequest(path, { method = "GET", query, body } = {}) {
     }
   }
 
+  // Determine effective credentials: prefer per-request values, else fall back
+  // to environment-level values.
+  const effectiveApiKey = apiKey || SNG_API_KEY || undefined;
+  const effectiveOrgSlug = orgSlug || ORG_SLUG || undefined;
+
   // Automatically inject organization identifier if available and not already provided
-  if (ORG_SLUG) {
+  if (effectiveOrgSlug) {
     if (!url.searchParams.has("organization_slug")) {
-      url.searchParams.set("organization_slug", ORG_SLUG);
+      url.searchParams.set("organization_slug", effectiveOrgSlug);
     }
     // Some endpoints expect `organization` instead of `organization_slug`
     if (!url.searchParams.has("organization")) {
-      url.searchParams.set("organization", ORG_SLUG);
+      url.searchParams.set("organization", effectiveOrgSlug);
     }
   }
 
   const headers = {
-    Authorization: `Bearer ${SNG_API_KEY}`,
-    "Content-Type": "application/json",
     Accept: "application/json",
   };
 
-  const options = { method, headers };
   if (body) {
-    options.body = JSON.stringify(body);
+    headers["Content-Type"] = "application/json";
   }
 
-  const res = await fetch(url, options);
+  // 🔑 Use the effective API key if available
+  if (effectiveApiKey) {
+    headers["Authorization"] = `Bearer ${effectiveApiKey}`;
+  }
+
+  const res = await fetch(url, {
+    method,
+    headers,
+    body: body ? JSON.stringify(body) : undefined,
+  });
 
   if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(
-      `Sweep&Go API ${method} ${url.pathname} failed: ${res.status} ${res.statusText} ${text}`
-    );
-  }
-
-  if (res.status === 204) {
-    return {};
+    const text = await res.text();
+    throw new Error(`Sweep&Go error ${res.status}: ${text}`);
   }
 
   const contentType = res.headers.get("content-type") || "";
@@ -275,14 +282,17 @@ const PackagedCrossSellsSchema = z.object({
 // ---------------------------------------------------------------------------
 
 // 1) Get onboarding price / cross-sell info
-async function tool_get_onboarding_price(args) {
+async function tool_get_onboarding_price(args, ctx = {}) {
   const input = OnboardingPriceInputSchema.parse(args);
+  const { sngApiKey, sngOrgSlug } = ctx || {};
 
   const data = await sngRequest(
     "/api/v2/client_on_boarding/price_registration_form",
     {
       method: "GET",
       query: input,
+      apiKey: sngApiKey,
+      orgSlug: sngOrgSlug,
     }
   );
 
@@ -293,9 +303,12 @@ async function tool_get_onboarding_price(args) {
 }
 
 // 2) Get available packaged cross-sells
-async function tool_get_packages_list() {
+async function tool_get_packages_list(args, ctx = {}) {
+  const { sngApiKey, sngOrgSlug } = ctx || {};
   const data = await sngRequest("/api/v2/packages_list", {
     method: "GET",
+    apiKey: sngApiKey,
+    orgSlug: sngOrgSlug,
   });
 
   return {
@@ -305,9 +318,12 @@ async function tool_get_packages_list() {
 }
 
 // 2b) Get all free quotes (listed in S&G docs)
-async function tool_get_free_quotes() {
+async function tool_get_free_quotes(args, ctx = {}) {
+  const { sngApiKey, sngOrgSlug } = ctx || {};
   const data = await sngRequest("/api/v2/free_quotes", {
     method: "GET",
+    apiKey: sngApiKey,
+    orgSlug: sngOrgSlug,
   });
 
   return {
@@ -317,15 +333,18 @@ async function tool_get_free_quotes() {
 }
 
 // 3) Parker-friendly quote + frequency recommendation
-async function tool_get_quote_recommendations(args) {
+async function tool_get_quote_recommendations(args, ctx = {}) {
   const input = OnboardingPriceInputSchema.parse(args);
+  const { sngApiKey, sngOrgSlug } = ctx || {};
 
   const [priceInfo, packagesInfo] = await Promise.all([
     sngRequest("/api/v2/client_on_boarding/price_registration_form", {
       method: "GET",
       query: input,
+      apiKey: sngApiKey,
+      orgSlug: sngOrgSlug,
     }),
-    sngRequest("/api/v2/packages_list", { method: "GET" }),
+    sngRequest("/api/v2/packages_list", { method: "GET", apiKey: sngApiKey, orgSlug: sngOrgSlug }),
   ]);
 
   const base = priceInfo?.regular_price ?? priceInfo?.price ?? null;
@@ -383,7 +402,7 @@ const CreateClientInputSchema = z.object({
   additional_comment: z.string().optional(),
 });
 
-async function tool_create_client(args) {
+async function tool_create_client(args, ctx = {}) {
   if (!ALLOW_WRITES) {
     return {
       type: "text",
@@ -392,11 +411,14 @@ async function tool_create_client(args) {
     };
   }
 
+  const { sngApiKey, sngOrgSlug } = ctx || {};
   const input = CreateClientInputSchema.parse(args);
 
   const data = await sngRequest("/api/v1/residential/onboarding", {
     method: "PUT",
     body: input,
+    apiKey: sngApiKey,
+    orgSlug: sngOrgSlug,
   });
 
   return {
@@ -408,233 +430,305 @@ async function tool_create_client(args) {
 }
 
 // Payment methods
-async function tool_list_payment_methods(args) {
+async function tool_list_payment_methods(args, ctx = {}) {
+  const { sngApiKey, sngOrgSlug } = ctx || {};
   const input = PaymentMethodsListSchema.parse(args);
   const data = await sngRequest("/api/v1/payment_methods", {
     method: "GET",
     query: { customer_id: input.customer_id },
+    apiKey: sngApiKey,
+    orgSlug: sngOrgSlug,
   });
   return { type: "text", text: JSON.stringify(data, null, 2) };
 }
 
-async function tool_get_payment_method(args) {
+async function tool_get_payment_method(args, ctx = {}) {
+  const { sngApiKey, sngOrgSlug } = ctx || {};
   const input = IdSchema.parse(args);
   const data = await sngRequest(`/api/v1/payment_methods/${input.id}`, {
     method: "GET",
+    apiKey: sngApiKey,
+    orgSlug: sngOrgSlug,
   });
   return { type: "text", text: JSON.stringify(data, null, 2) };
 }
 
 // Payment sources
-async function tool_get_payment_source(args) {
+async function tool_get_payment_source(args, ctx = {}) {
+  const { sngApiKey, sngOrgSlug } = ctx || {};
   const input = IdSchema.parse(args);
   const data = await sngRequest(`/api/v1/payment_sources/${input.id}`, {
     method: "GET",
+    apiKey: sngApiKey,
+    orgSlug: sngOrgSlug,
   });
   return { type: "text", text: JSON.stringify(data, null, 2) };
 }
 
-async function tool_create_payment_source(args) {
+async function tool_create_payment_source(args, ctx = {}) {
   if (!ALLOW_WRITES) return writesDisabledResponse();
+  const { sngApiKey, sngOrgSlug } = ctx || {};
   const input = PaymentSourceCreateSchema.parse(args);
   const data = await sngRequest("/api/v1/payment_sources", {
     method: "POST",
     body: input,
+    apiKey: sngApiKey,
+    orgSlug: sngOrgSlug,
   });
   return { type: "text", text: JSON.stringify(data, null, 2) };
 }
 
 // Pre-authorizations
-async function tool_list_pre_authorizations(args) {
+async function tool_list_pre_authorizations(args, ctx = {}) {
+  const { sngApiKey, sngOrgSlug } = ctx || {};
   const input = PreAuthorizationListSchema.parse(args || {});
   const data = await sngRequest("/api/v1/pre_authorizations", {
     method: "GET",
     query: input,
+    apiKey: sngApiKey,
+    orgSlug: sngOrgSlug,
   });
   return { type: "text", text: JSON.stringify(data, null, 2) };
 }
 
-async function tool_get_pre_authorization(args) {
+async function tool_get_pre_authorization(args, ctx = {}) {
+  const { sngApiKey, sngOrgSlug } = ctx || {};
   const input = IdSchema.parse(args);
   const data = await sngRequest(`/api/v1/pre_authorizations/${input.id}`, {
     method: "GET",
+    apiKey: sngApiKey,
+    orgSlug: sngOrgSlug,
   });
   return { type: "text", text: JSON.stringify(data, null, 2) };
 }
 
-async function tool_create_pre_authorization(args) {
+async function tool_create_pre_authorization(args, ctx = {}) {
   if (!ALLOW_WRITES) return writesDisabledResponse();
+  const { sngApiKey, sngOrgSlug } = ctx || {};
   const input = PreAuthorizationCreateSchema.parse(args);
   const data = await sngRequest("/api/v1/pre_authorizations", {
     method: "POST",
     body: input,
+    apiKey: sngApiKey,
+    orgSlug: sngOrgSlug,
   });
   return { type: "text", text: JSON.stringify(data, null, 2) };
 }
 
-async function tool_delete_pre_authorization(args) {
+async function tool_delete_pre_authorization(args, ctx = {}) {
   if (!ALLOW_WRITES) return writesDisabledResponse();
+  const { sngApiKey, sngOrgSlug } = ctx || {};
   const input = IdSchema.parse(args);
   const data = await sngRequest(`/api/v1/pre_authorizations/${input.id}`, {
     method: "DELETE",
+    apiKey: sngApiKey,
+    orgSlug: sngOrgSlug,
   });
   return { type: "text", text: JSON.stringify(data, null, 2) };
 }
 
 // Charges
-async function tool_list_charges(args) {
+async function tool_list_charges(args, ctx = {}) {
+  const { sngApiKey, sngOrgSlug } = ctx || {};
   const input = ChargeListSchema.parse(args || {});
   const data = await sngRequest("/api/v1/charges", {
     method: "GET",
     query: input,
+    apiKey: sngApiKey,
+    orgSlug: sngOrgSlug,
   });
   return { type: "text", text: JSON.stringify(data, null, 2) };
 }
 
-async function tool_get_charge(args) {
+async function tool_get_charge(args, ctx = {}) {
+  const { sngApiKey, sngOrgSlug } = ctx || {};
   const input = IdSchema.parse(args);
   const data = await sngRequest(`/api/v1/charges/${input.id}`, {
     method: "GET",
+    apiKey: sngApiKey,
+    orgSlug: sngOrgSlug,
   });
   return { type: "text", text: JSON.stringify(data, null, 2) };
 }
 
-async function tool_create_charge(args) {
+async function tool_create_charge(args, ctx = {}) {
   if (!ALLOW_WRITES) return writesDisabledResponse();
+  const { sngApiKey, sngOrgSlug } = ctx || {};
   const input = ChargeCreateSchema.parse(args);
   const data = await sngRequest("/api/v1/charges", {
     method: "POST",
     body: input,
+    apiKey: sngApiKey,
+    orgSlug: sngOrgSlug,
   });
   return { type: "text", text: JSON.stringify(data, null, 2) };
 }
 
-async function tool_refund_charge(args) {
+async function tool_refund_charge(args, ctx = {}) {
   if (!ALLOW_WRITES) return writesDisabledResponse();
+  const { sngApiKey, sngOrgSlug } = ctx || {};
   const input = RefundSchema.parse(args);
   const body = input.amount !== undefined ? { amount: input.amount } : undefined;
   const data = await sngRequest(`/api/v1/charges/${input.id}/refund`, {
     method: "POST",
     body,
+    apiKey: sngApiKey,
+    orgSlug: sngOrgSlug,
   });
   return { type: "text", text: JSON.stringify(data, null, 2) };
 }
 
 // Customers
-async function tool_list_customers(args) {
+async function tool_list_customers(args, ctx = {}) {
+  const { sngApiKey, sngOrgSlug } = ctx || {};
   const input = CustomerListSchema.parse(args || {});
   const data = await sngRequest("/api/v1/customers", {
     method: "GET",
     query: input,
+    apiKey: sngApiKey,
+    orgSlug: sngOrgSlug,
   });
   return { type: "text", text: JSON.stringify(data, null, 2) };
 }
 
-async function tool_get_customer(args) {
+async function tool_get_customer(args, ctx = {}) {
+  const { sngApiKey, sngOrgSlug } = ctx || {};
   const input = IdSchema.parse(args);
   const data = await sngRequest(`/api/v1/customers/${input.id}`, {
     method: "GET",
+    apiKey: sngApiKey,
+    orgSlug: sngOrgSlug,
   });
   return { type: "text", text: JSON.stringify(data, null, 2) };
 }
 
-async function tool_create_customer(args) {
+async function tool_create_customer(args, ctx = {}) {
   if (!ALLOW_WRITES) return writesDisabledResponse();
+  const { sngApiKey, sngOrgSlug } = ctx || {};
   const input = CustomerCreateSchema.parse(args);
   const data = await sngRequest("/api/v1/customers", {
     method: "POST",
     body: input,
+    apiKey: sngApiKey,
+    orgSlug: sngOrgSlug,
   });
   return { type: "text", text: JSON.stringify(data, null, 2) };
 }
 
-async function tool_update_customer(args) {
+async function tool_update_customer(args, ctx = {}) {
   if (!ALLOW_WRITES) return writesDisabledResponse();
+  const { sngApiKey, sngOrgSlug } = ctx || {};
   const { id, ...rest } = { ...(args || {}) };
   const idInput = IdSchema.parse({ id });
   const input = CustomerUpdateSchema.parse(rest);
   const data = await sngRequest(`/api/v1/customers/${idInput.id}`, {
     method: "PUT",
     body: input,
+    apiKey: sngApiKey,
+    orgSlug: sngOrgSlug,
   });
   return { type: "text", text: JSON.stringify(data, null, 2) };
 }
 
-async function tool_delete_customer(args) {
+async function tool_delete_customer(args, ctx = {}) {
   if (!ALLOW_WRITES) return writesDisabledResponse();
+  const { sngApiKey, sngOrgSlug } = ctx || {};
   const input = IdSchema.parse(args);
   const data = await sngRequest(`/api/v1/customers/${input.id}`, {
     method: "DELETE",
+    apiKey: sngApiKey,
+    orgSlug: sngOrgSlug,
   });
   return { type: "text", text: JSON.stringify(data, null, 2) };
 }
 
 // Locations
-async function tool_list_locations(args) {
+async function tool_list_locations(args, ctx = {}) {
+  const { sngApiKey, sngOrgSlug } = ctx || {};
   const input = LocationListSchema.parse(args || {});
   const data = await sngRequest("/api/v1/locations", {
     method: "GET",
     query: input,
+    apiKey: sngApiKey,
+    orgSlug: sngOrgSlug,
   });
   return { type: "text", text: JSON.stringify(data, null, 2) };
 }
 
-async function tool_get_location(args) {
+async function tool_get_location(args, ctx = {}) {
+  const { sngApiKey, sngOrgSlug } = ctx || {};
   const input = IdSchema.parse(args);
   const data = await sngRequest(`/api/v1/locations/${input.id}`, {
     method: "GET",
+    apiKey: sngApiKey,
+    orgSlug: sngOrgSlug,
   });
   return { type: "text", text: JSON.stringify(data, null, 2) };
 }
 
-async function tool_create_location(args) {
+async function tool_create_location(args, ctx = {}) {
   if (!ALLOW_WRITES) return writesDisabledResponse();
+  const { sngApiKey, sngOrgSlug } = ctx || {};
   const input = LocationCreateSchema.parse(args);
   const data = await sngRequest("/api/v1/locations", {
     method: "POST",
     body: input,
+    apiKey: sngApiKey,
+    orgSlug: sngOrgSlug,
   });
   return { type: "text", text: JSON.stringify(data, null, 2) };
 }
 
-async function tool_update_location(args) {
+async function tool_update_location(args, ctx = {}) {
   if (!ALLOW_WRITES) return writesDisabledResponse();
+  const { sngApiKey, sngOrgSlug } = ctx || {};
   const { id, ...rest } = { ...(args || {}) };
   const idInput = IdSchema.parse({ id });
   const input = LocationUpdateSchema.parse(rest);
   const data = await sngRequest(`/api/v1/locations/${idInput.id}`, {
     method: "PUT",
     body: input,
+    apiKey: sngApiKey,
+    orgSlug: sngOrgSlug,
   });
   return { type: "text", text: JSON.stringify(data, null, 2) };
 }
 
 // Webhooks
-async function tool_list_webhooks(args) {
+async function tool_list_webhooks(args, ctx = {}) {
+  const { sngApiKey, sngOrgSlug } = ctx || {};
   const input = WebhookListSchema.parse(args || {});
-  const organization_id = input.organization_id || ORG_SLUG;
+  const organization_id = input.organization_id || sngOrgSlug || ORG_SLUG;
   const data = await sngRequest("/api/v1/webhooks", {
     method: "GET",
     query: { organization_id },
+    apiKey: sngApiKey,
+    orgSlug: sngOrgSlug,
   });
   return { type: "text", text: JSON.stringify(data, null, 2) };
 }
 
-async function tool_retry_webhook(args) {
+async function tool_retry_webhook(args, ctx = {}) {
   if (!ALLOW_WRITES) return writesDisabledResponse();
+  const { sngApiKey, sngOrgSlug } = ctx || {};
   const input = IdSchema.parse(args);
   const data = await sngRequest(`/api/v1/webhooks/${input.id}/retry`, {
     method: "PUT",
+    apiKey: sngApiKey,
+    orgSlug: sngOrgSlug,
   });
   return { type: "text", text: JSON.stringify(data, null, 2) };
 }
 
 // Packaged cross-sells
-async function tool_get_packaged_cross_sells(args) {
+async function tool_get_packaged_cross_sells(args, ctx = {}) {
+  const { sngApiKey, sngOrgSlug } = ctx || {};
   const input = PackagedCrossSellsSchema.parse(args);
   const data = await sngRequest("/api/v1/packaged_cross_sells", {
     method: "GET",
     query: input,
+    apiKey: sngApiKey,
+    orgSlug: sngOrgSlug,
   });
   return { type: "text", text: JSON.stringify(data, null, 2) };
 }
@@ -1225,7 +1319,7 @@ function jsonRpcError(id, code, message, data) {
   };
 }
 
-async function handleJsonRpc(req, res) {
+async function handleJsonRpc(req, res, sngApiKey, sngOrgSlug) {
   setCors(req, res);
 
   const raw = await readRequestBody(req);
@@ -1250,7 +1344,7 @@ async function handleJsonRpc(req, res) {
       JSON.stringify({
         jsonrpc: "2.0",
         id: null,
-        result: { tools: ALL_TOOLS.map(({ handler, ...rest }) => rest), nextCursor: null },
+        result: { tools: ALL_TOOLS.map(({ handler, ...rest }) => rest) },
       })
     );
     return;
@@ -1266,7 +1360,7 @@ async function handleJsonRpc(req, res) {
       JSON.stringify({
         jsonrpc: "2.0",
         id: null,
-        result: { tools: ALL_TOOLS.map(({ handler, ...rest }) => rest), nextCursor: null },
+        result: { tools: ALL_TOOLS.map(({ handler, ...rest }) => rest) },
       })
     );
     return;
@@ -1278,7 +1372,7 @@ async function handleJsonRpc(req, res) {
       JSON.stringify({
         jsonrpc: "2.0",
         id: payload?.id ?? null,
-        result: { tools: ALL_TOOLS.map(({ handler, ...rest }) => rest), nextCursor: null },
+        result: { tools: ALL_TOOLS.map(({ handler, ...rest }) => rest) },
       })
     );
     return;
@@ -1314,7 +1408,7 @@ async function handleJsonRpc(req, res) {
         return;
       }
       case "tools/list": {
-        respond({ tools: ALL_TOOLS.map(({ handler, ...rest }) => rest), nextCursor: null });
+        respond({ tools: ALL_TOOLS.map(({ handler, ...rest }) => rest) });
         return;
       }
       case "tools/call": {
@@ -1324,7 +1418,7 @@ async function handleJsonRpc(req, res) {
         if (!tool) {
           throw new Error(`Unknown tool: ${toolName}`);
         }
-        const content = await tool.handler(args);
+        const content = await tool.handler(args, { sngApiKey, sngOrgSlug });
         respond({ content: [content] });
         return;
       }
@@ -1466,11 +1560,13 @@ const httpServer = http.createServer(async (req, res) => {
       "Access-Control-Allow-Headers": "Content-Type, Accept, Authorization, X-Requested-With",
       "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
       "Access-Control-Allow-Credentials": "true",
+      "Access-Control-Allow-Headers":
+  "Content-Type, Accept, Authorization, X-SNG-API-Key, X-SNG-Org-Slug",
+
     });
     res.end();
     return;
   }
-
   const sessionId = parsedUrl.searchParams.get("sessionId");
   // SSE setup (GET)
   if (req.method === "GET") {
@@ -1485,7 +1581,7 @@ const httpServer = http.createServer(async (req, res) => {
         JSON.stringify({
           jsonrpc: "2.0",
           id: null,
-          result: { tools: ALL_TOOLS.map(({ handler, ...rest }) => rest), nextCursor: null },
+          result: { tools: ALL_TOOLS.map(({ handler, ...rest }) => rest) },
         })
       );
       return;
@@ -1521,7 +1617,21 @@ const httpServer = http.createServer(async (req, res) => {
 
     // JSON-RPC MCP over HTTP (no sessionId)
     if (!sessionId) {
-      return handleJsonRpc(req, res);
+      // For JSON-RPC over HTTP (no SSE session), require per-request Sweep&Go headers
+      const sngApiKey = req.headers["x-sng-api-key"];
+      const sngOrgSlug = req.headers["x-sng-org-slug"] || req.headers["x-sng-location-slug"];
+
+      if (!sngApiKey || !sngOrgSlug) {
+        res.writeHead(401, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            error: "Missing Sweep&Go credentials. Send x-sng-api-key and x-sng-org-slug headers.",
+          })
+        );
+        return;
+      }
+
+      return handleJsonRpc(req, res, sngApiKey, sngOrgSlug);
     }
 
     // SSE POST messages with session
